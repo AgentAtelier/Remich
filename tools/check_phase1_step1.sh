@@ -141,7 +141,14 @@ else
     pass "remich_core's resolved dependencies contain no engine crate"
 fi
 
-if cargo tree -p remich_core --edges normal,build >"$LOG_DIR/tree-core.txt" 2>/dev/null; then
+# `cargo tree` annotates every workspace package with its absolute checkout
+# path, and a checkout path that happens to contain the words `godot`/`gdext`
+# must not be mistaken for an engine crate. This check is about crate identity,
+# so only the source-path annotation is stripped before grepping. A real engine
+# package line (`├── godot v0.5.5`) carries no path annotation here and is
+# still caught.
+if cargo tree -p remich_core --edges normal,build 2>/dev/null \
+        | sed -E 's/ \((path[+]file:)?\/[^)]*\)//g' >"$LOG_DIR/tree-core.txt"; then
     if grep -qiE 'godot|gdext' "$LOG_DIR/tree-core.txt"; then
         fail "cargo tree -p remich_core shows an engine crate:"
         grep -niE 'godot|gdext' "$LOG_DIR/tree-core.txt" | sed 's/^/      | /'
@@ -165,7 +172,10 @@ for member in $workspace_members; do
     if [ "$member" = "remich_gdext" ]; then
         continue
     fi
-    if cargo tree -p "$member" --edges normal,build 2>/dev/null | grep -qiE 'godot|gdext'; then
+    # Path annotation stripped, same reason as above: crate identity only.
+    if cargo tree -p "$member" --edges normal,build 2>/dev/null \
+            | sed -E 's/ \((path[+]file:)?\/[^)]*\)//g' \
+            | grep -qiE 'godot|gdext'; then
         engine_breaches="$engine_breaches $member"
     fi
 done

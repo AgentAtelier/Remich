@@ -167,6 +167,9 @@ dependencies = [
 [[package]]
 name = "remich_core"
 version = "0.1.0"
+dependencies = [
+ "anvil_sim",
+]
 
 [[package]]
 name = "remich_gdext"
