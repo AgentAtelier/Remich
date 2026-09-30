@@ -316,10 +316,13 @@ else
     fail "$VALIDATOR is missing"
 fi
 
-if python3 -m py_compile "$VALIDATOR" 2>/dev/null; then
-    pass "the validator compiles"
+# A syntax check only — `py_compile` would drop a __pycache__ into the tree
+# and make check 17 fail on state this step generated.
+if python3 -c "import ast, sys; ast.parse(open(sys.argv[1], encoding='utf-8').read())" "$VALIDATOR" \
+        2>/dev/null; then
+    pass "the validator is syntactically valid Python"
 else
-    fail "the validator does not compile"
+    fail "the validator does not parse"
 fi
 
 if python3 "$VALIDATOR" "$TRACE_ONE" >"$LOG_DIR/validator.log" 2>&1; then
@@ -438,7 +441,8 @@ header "12. REMICH_DAY_OK appears, and no failure or parse error does"
 
 for log in "$LOG_ONE" "$LOG_TWO"; do
     if grep -q '^REMICH_DAY_OK ' "$log"; then
-        pass "$(basename "$log"): $(grep -o '^REMICH_DAY_OK [^ ]* checkpoints=[0-9]* final_tick=[0-9]*' "$log")"
+        pass "$(basename "$log"): REMICH_DAY_OK observed"
+        grep '^REMICH_DAY_OK ' "$log" | sed 's/^/      | /'
     else
         fail "$(basename "$log"): no REMICH_DAY_OK marker"
     fi
@@ -453,10 +457,15 @@ fi
 
 if grep -qE '^REMICH_DAY_OK .*distinct=[0-9]+ .*first_id=[0-9]+ .*last_id=[0-9]+ ' "$LOG_ONE"; then
     pass "the marker summarises first choice, last choice and distinct ids"
-    grep -oE '^REMICH_DAY_OK .*distinct=[0-9]+ .*first_id=[0-9]+ .*last_id=[0-9]+' "$LOG_ONE" \
-        | sed 's/^/      | /'
+    grep '^REMICH_DAY_OK ' "$LOG_ONE" | sed 's/^/      | /'
 else
     fail "the day marker carries no first/last/distinct summary"
+fi
+
+if grep -qE '^REMICH_DAY_OK .*first_name=.+ last_id=[0-9]+ last_name=.+' "$LOG_ONE"; then
+    pass "the marker names the first and last chosen activities"
+else
+    fail "the day marker does not name the first and last chosen activities"
 fi
 
 problem_pattern='REMICH_(DAY|SCORER|DECAY|BRIDGE)_FAIL|SCRIPT ERROR|Parse Error'
@@ -525,9 +534,12 @@ fi
 # --------------------------- 15. no tracked trace, no timing probe remains
 header "15. Generated traces are not tracked and no timing probe remains"
 
-tracked_traces="$(git ls-files | grep -E '\.jsonl$|day_trace' || true)"
+# The harness only ever writes `*.jsonl`, and only where REMICH_DAY_TRACE_PATH
+# points; a pathspec match keeps this check about traces rather than about the
+# file named check_day_trace.py.
+tracked_traces="$(git ls-files -- '*.jsonl' 2>/dev/null)"
 if [ -z "$tracked_traces" ]; then
-    pass "no generated trace file is tracked by git"
+    pass "no generated trace file (*.jsonl) is tracked by git"
 else
     fail "a generated trace file is tracked by git:"
     printf '%s\n' "$tracked_traces" | sed 's/^/      | /'
