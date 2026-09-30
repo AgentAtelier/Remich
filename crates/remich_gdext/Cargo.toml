@@ -5,8 +5,24 @@ edition.workspace = true
 description = "Thin binding layer: the only place engine types may appear (docs/PLAN.md §1.2)."
 publish = false
 
+[lib]
+# `cdylib` is the dynamic library Godot loads through the GDExtension
+# interface; `rlib` keeps the crate testable with `cargo test`.
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 remich_core = { path = "../remich_core" }
 
-# No engine binding is declared here yet, on purpose. Which `gdext` version
-# supports the pinned engine is a Step 2 question, recorded in Step 2.
+# The engine binding. Version and feature are both pinned deliberately; the
+# upstream evidence that qualifies them for the pinned Godot 4.7.2 is committed
+# in docs/binding-compatibility.md.
+#
+#   version = "=0.5.5"   an EXACT pin. A caret range or a plain "0.5.5" would
+#                        let a future `cargo update` silently change which
+#                        binding version this step qualified.
+#   features = ["api-4-7"]
+#                        compile against the Godot 4.7 API. This is not the
+#                        default in gdext 0.5.5 (its default prebuilt API level
+#                        is 4.6, see docs/binding-compatibility.md), so leaving
+#                        it out would quietly target the wrong engine API.
+godot = { version = "=0.5.5", features = ["api-4-7"] }

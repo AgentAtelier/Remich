@@ -30,23 +30,42 @@ Remich's boundary is [docs/PLAN.md §1](docs/PLAN.md). In short:
 5. **Rebuild speed is a requirement, not a hope.** The time from a one-line change to seeing it in
    Godot is measured and reported in every step that touches the build.
 
-## The repository's shape (phase 1, step 1)
+## The repository's shape
 
 | Path | What it is |
 | --- | --- |
 | [`Cargo.toml`](Cargo.toml) | The workspace: engine-free core and thin binding as separate crates. |
 | [`crates/remich_core`](crates/remich_core) | The engine-free core. Plain Rust; no engine dependency, no engine types. |
-| [`crates/remich_gdext`](crates/remich_gdext) | The binding side — boundary and skeleton only for now. |
-| [`godot/`](godot) | Remich's own small Godot test project. The bridge is proved here, in Remich's project, before it goes anywhere else. |
+| [`crates/remich_gdext`](crates/remich_gdext) | The binding side — a real, loadable GDExtension and the only place Godot types appear. |
+| [`godot/`](godot) | Remich's own small Godot test project, including `remich.gdextension`. The bridge is proved here, in Remich's project, before it goes anywhere else. |
 | [`rust-toolchain.toml`](rust-toolchain.toml) | The exact pinned Rust toolchain. |
-| [`tools/check_phase1_step1.sh`](tools/check_phase1_step1.sh) | The acceptance check for this step. |
+| [`docs/binding-compatibility.md`](docs/binding-compatibility.md) | Which binding supports the pinned engine, with dated upstream evidence. |
+| [`tools/check_phase1_step1.sh`](tools/check_phase1_step1.sh) | The acceptance check for step 1. |
+| [`tools/check_phase1_step2.sh`](tools/check_phase1_step2.sh) | The acceptance check for step 2; runs the step 1 check first. |
 | [`docs/PLAN.md`](docs/PLAN.md) | The plan. |
 
-Generated state is never committed: Cargo's `target/` and Godot's `.godot/` are ignored.
+Generated state is never committed: Cargo's `target/`, Godot's `.godot/`, the extension binary and
+the derived bridge expectation are all ignored.
 
 **Not in this step** (later steps of [docs/PLAN.md](docs/PLAN.md)): scoring, needs, actions,
-utilities, binding calls, engine-facing nodes, and a simulated day. Step 1 is the shape, the pinned
-toolchain, the test project, and the measured rebuild.
+utilities, engine-facing nodes of our own, and a simulated day. Step 1 was the shape, the pinned
+toolchain, the test project and the measured rebuild; step 2 added the bridge itself — one Rust
+callable and one value, observed and verified in Godot.
+
+## The binding (phase 1, step 2)
+
+Remich binds to Godot through [godot-rust/gdext](https://github.com/godot-rust/gdext) — the `godot`
+crate — pinned exactly at `=0.5.5` **with the `api-4-7` feature**, so the bridge compiles against
+the Godot 4.7 API rather than whatever the crate happens to default to.
+
+Which binding version supports the pinned engine was an open question in the plan, so it is
+answered with recorded evidence in [`docs/binding-compatibility.md`](docs/binding-compatibility.md):
+the upstream release notes, the documented `runtime >= API` compatibility rule, the runtime guard in
+the binding's own source, and two dated build observations — all checked 2026-09-30.
+
+The bridge itself is deliberately trivial. Godot instantiates `RemichBridge`, calls
+`bridge_probe()`, and gets `BRIDGE_PROBE_VALUE` back. Proving that call happens — not building
+behaviour — is what this step is for.
 
 ## Pinned Rust toolchain
 
@@ -74,8 +93,9 @@ The test project is opened with the pinned Godot executable, unchanged:
 
 ## Acceptance
 
-One command:
+One command per step:
 
 ```bash
-bash tools/check_phase1_step1.sh
+bash tools/check_phase1_step1.sh   # the repository's shape
+bash tools/check_phase1_step2.sh   # the bridge exists (runs the step 1 check first)
 ```

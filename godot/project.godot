@@ -18,3 +18,4 @@ config/features=PackedStringArray("4.7")
 [autoload]
 
 Marker="*res://marker.gd"
+BridgeProbe="*res://bridge_probe.gd"
