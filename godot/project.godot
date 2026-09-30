@@ -19,4 +19,5 @@ config/features=PackedStringArray("4.7")
 
 Marker="*res://marker.gd"
 ScorerProbe="*res://scorer_probe.gd"
+DayProbe="*res://day_probe.gd"
 BridgeProbe="*res://bridge_probe.gd"
