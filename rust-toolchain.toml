@@ -1,0 +1,17 @@
+# Remich pins an EXACT Rust toolchain. No `stable`, `beta` or `nightly` alias:
+# a pinned toolchain is what makes rebuild timings reproducible and matches the
+# determinism requirement (docs/PLAN.md §1.4, §1.5).
+#
+# Exact `rustc -Vv` for this pin, as recorded on 2026-09-30:
+#
+#   rustc 1.98.1 (48a229cea 2026-09-01)
+#   binary: rustc
+#   commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985
+#   commit-date: 2026-09-01
+#   host: x86_64-unknown-linux-gnu
+#   release: 1.98.1
+#   LLVM version: 22.1.8
+
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"

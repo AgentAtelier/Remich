@@ -1,0 +1,13 @@
+# Generated build state — never committed.
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Godot: the import cache is regenerated every time the project opens.
+.godot/
+
+# Editor and OS droppings
+*.swp
+*~
+.DS_Store

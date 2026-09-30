@@ -1,0 +1,19 @@
+# Remich workspace — Phase 1, Step 1 "The repository's shape" (docs/PLAN.md).
+#
+# Two sides, kept apart on purpose (docs/PLAN.md §1.2, the firewall):
+#
+#   crates/remich_core    engine-free. Plain Rust: no engine dependency, no engine types.
+#   crates/remich_gdext   the thin binding. The only place engine types are allowed to appear.
+#
+# Nothing in this step picks the binding version or adds engine-facing code; that is Step 2.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/remich_core",
+    "crates/remich_gdext",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
