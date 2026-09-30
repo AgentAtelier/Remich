@@ -1,0 +1,401 @@
+[
+  {
+    "id": 1,
+    "name": "Farm/Tend",
+    "primary_need": "food",
+    "min_age_category": "adult",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": {
+      "produce": {
+        "pool": "food",
+        "rate": 0.002
+      }
+    },
+    "time_preference": "dawn",
+    "duration_ticks": 60,
+    "primary_affordance_id": 20,
+    "min_physical_capability": 0.5
+  },
+  {
+    "id": 2,
+    "name": "Hunt",
+    "primary_need": "food",
+    "min_age_category": "adult",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": {
+      "produce": {
+        "pool": "food",
+        "rate": 0.0015
+      }
+    },
+    "time_preference": "dawn",
+    "duration_ticks": 120,
+    "primary_affordance_id": 31,
+    "min_physical_capability": 0.7
+  },
+  {
+    "id": 3,
+    "name": "Gather",
+    "primary_need": "food",
+    "min_age_category": "all",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": {
+      "produce": {
+        "pool": "food",
+        "rate": 0.0005
+      }
+    },
+    "time_preference": "dawn",
+    "duration_ticks": 45,
+    "primary_affordance_id": 40,
+    "min_physical_capability": 0.1
+  },
+  {
+    "id": 4,
+    "name": "Fish",
+    "primary_need": "food",
+    "min_age_category": "adult",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": {
+      "produce": {
+        "pool": "food",
+        "rate": 0.001
+      }
+    },
+    "time_preference": "dawn",
+    "duration_ticks": 90,
+    "primary_affordance_id": 43,
+    "min_physical_capability": 0.5
+  },
+  {
+    "id": 5,
+    "name": "Cook/Prepare",
+    "primary_need": "food",
+    "min_age_category": "adult",
+    "communal_benefit": true,
+    "is_major": false,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "day",
+    "duration_ticks": 30,
+    "primary_affordance_id": 23,
+    "min_physical_capability": 0.3
+  },
+  {
+    "id": 6,
+    "name": "Share Food",
+    "primary_need": "food",
+    "min_age_category": "all",
+    "communal_benefit": true,
+    "is_major": false,
+    "coping_type": "emotional",
+    "resource_effect": null,
+    "time_preference": "anytime",
+    "duration_ticks": 15,
+    "primary_affordance_id": 63,
+    "min_physical_capability": 0.0
+  },
+  {
+    "id": 7,
+    "name": "Fetch Water",
+    "primary_need": "water",
+    "min_age_category": "all",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": {
+      "produce": {
+        "pool": "water",
+        "rate": 0.002
+      }
+    },
+    "time_preference": "dawn",
+    "duration_ticks": 30,
+    "primary_affordance_id": 41,
+    "min_physical_capability": 0.1
+  },
+  {
+    "id": 8,
+    "name": "Build/Repair",
+    "primary_need": "shelter",
+    "min_age_category": "adult",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "material",
+    "resource_effect": {
+      "produce": {
+        "pool": "structural_integrity",
+        "rate": 0.001
+      }
+    },
+    "time_preference": "dawn",
+    "duration_ticks": 90,
+    "primary_affordance_id": 2,
+    "min_physical_capability": 0.7
+  },
+  {
+    "id": 9,
+    "name": "Seek Shelter",
+    "primary_need": "shelter",
+    "min_age_category": "all",
+    "communal_benefit": false,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "anytime",
+    "duration_ticks": 20,
+    "primary_affordance_id": 30,
+    "min_physical_capability": 0.0
+  },
+  {
+    "id": 10,
+    "name": "Secure/Reinforce",
+    "primary_need": "safety",
+    "min_age_category": "adult",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "material",
+    "resource_effect": null,
+    "time_preference": "dawn",
+    "duration_ticks": 60,
+    "primary_affordance_id": 10,
+    "min_physical_capability": 0.6
+  },
+  {
+    "id": 11,
+    "name": "Warn Others",
+    "primary_need": "safety",
+    "min_age_category": "elder",
+    "communal_benefit": true,
+    "is_major": false,
+    "coping_type": "emotional",
+    "resource_effect": null,
+    "time_preference": "anytime",
+    "duration_ticks": 15,
+    "primary_affordance_id": 62,
+    "min_physical_capability": 0.0
+  },
+  {
+    "id": 12,
+    "name": "Lookout/Observe",
+    "primary_need": "safety",
+    "min_age_category": "child",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "dawn",
+    "duration_ticks": 45,
+    "primary_affordance_id": 50,
+    "min_physical_capability": 0.1
+  },
+  {
+    "id": 13,
+    "name": "Flee",
+    "primary_need": "safety",
+    "min_age_category": "all",
+    "communal_benefit": false,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "anytime",
+    "duration_ticks": 30,
+    "primary_affordance_id": 32,
+    "min_physical_capability": 0.3
+  },
+  {
+    "id": 14,
+    "name": "Sleep",
+    "primary_need": "sleep",
+    "min_age_category": "all",
+    "communal_benefit": false,
+    "is_major": false,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "night",
+    "duration_ticks": 180,
+    "primary_affordance_id": null,
+    "min_physical_capability": 0.0
+  },
+  {
+    "id": 15,
+    "name": "Rest",
+    "primary_need": "sleep",
+    "min_age_category": "all",
+    "communal_benefit": false,
+    "is_major": false,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "dusk",
+    "duration_ticks": 30,
+    "primary_affordance_id": null,
+    "min_physical_capability": 0.0
+  },
+  {
+    "id": 16,
+    "name": "Gather Socially",
+    "primary_need": "companionship",
+    "min_age_category": "all",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "emotional",
+    "resource_effect": null,
+    "time_preference": "dusk",
+    "duration_ticks": 45,
+    "primary_affordance_id": 60,
+    "min_physical_capability": 0.0
+  },
+  {
+    "id": 17,
+    "name": "Tell Story",
+    "primary_need": "companionship",
+    "min_age_category": "elder",
+    "communal_benefit": true,
+    "is_major": false,
+    "coping_type": "emotional",
+    "resource_effect": null,
+    "time_preference": "dusk",
+    "duration_ticks": 30,
+    "primary_affordance_id": 61,
+    "min_physical_capability": 0.0
+  },
+  {
+    "id": 18,
+    "name": "Mourn",
+    "primary_need": "companionship",
+    "min_age_category": "all",
+    "communal_benefit": false,
+    "is_major": false,
+    "coping_type": "emotional",
+    "resource_effect": null,
+    "time_preference": "anytime",
+    "duration_ticks": 20,
+    "primary_affordance_id": 64,
+    "min_physical_capability": 0.0
+  },
+  {
+    "id": 19,
+    "name": "Small Act of Normality",
+    "primary_need": "companionship",
+    "min_age_category": "all",
+    "communal_benefit": false,
+    "is_major": false,
+    "coping_type": "emotional",
+    "resource_effect": null,
+    "time_preference": "anytime",
+    "duration_ticks": 15,
+    "primary_affordance_id": 27,
+    "min_physical_capability": 0.0
+  },
+  {
+    "id": 20,
+    "name": "Steal",
+    "primary_need": "food",
+    "min_age_category": "adult",
+    "communal_benefit": false,
+    "is_major": false,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "night",
+    "duration_ticks": 15,
+    "primary_affordance_id": null,
+    "min_physical_capability": 0.4
+  },
+  {
+    "id": 21,
+    "name": "Scavenge/Salvage",
+    "primary_need": "food",
+    "min_age_category": "adult",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "material",
+    "resource_effect": {
+      "produce": {
+        "pool": "materials",
+        "rate": 0.0005
+      }
+    },
+    "time_preference": "dawn",
+    "duration_ticks": 60,
+    "primary_affordance_id": 42,
+    "min_physical_capability": 0.4
+  },
+  {
+    "id": 22,
+    "name": "Observe",
+    "primary_need": "safety",
+    "min_age_category": "child",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "anytime",
+    "duration_ticks": 30,
+    "primary_affordance_id": 50,
+    "min_physical_capability": 0.0
+  },
+  {
+    "id": 23,
+    "name": "Imitate",
+    "primary_need": "companionship",
+    "min_age_category": "child",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "anytime",
+    "duration_ticks": 30,
+    "primary_affordance_id": 60,
+    "min_physical_capability": 0.1
+  },
+  {
+    "id": 24,
+    "name": "Play",
+    "primary_need": "companionship",
+    "min_age_category": "child",
+    "communal_benefit": false,
+    "is_major": true,
+    "coping_type": "emotional",
+    "resource_effect": null,
+    "time_preference": "day",
+    "duration_ticks": 45,
+    "primary_affordance_id": 61,
+    "min_physical_capability": 0.1
+  },
+  {
+    "id": 25,
+    "name": "Help (Light)",
+    "primary_need": "food",
+    "min_age_category": "child",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "day",
+    "duration_ticks": 30,
+    "primary_affordance_id": 27,
+    "min_physical_capability": 0.2
+  },
+  {
+    "id": 26,
+    "name": "Lookout",
+    "primary_need": "safety",
+    "min_age_category": "child",
+    "communal_benefit": true,
+    "is_major": true,
+    "coping_type": "none",
+    "resource_effect": null,
+    "time_preference": "day",
+    "duration_ticks": 30,
+    "primary_affordance_id": 50,
+    "min_physical_capability": 0.0
+  }
+]

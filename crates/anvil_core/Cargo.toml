@@ -1,0 +1,18 @@
+[package]
+name = "anvil_core"
+# Donor manifest: edition inherited from the donor workspace (edition = "2024").
+# Remich's workspace pins edition = "2021", so the donor's workspace-inherited
+# edition is stated explicitly here instead. No other change. See
+# docs/anvil-import-phase1-step3.md.
+edition = "2024"
+version.workspace = true
+license = "MIT"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+[build-dependencies]
+thiserror = "2.0.18"
