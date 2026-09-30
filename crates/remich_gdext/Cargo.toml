@@ -1,0 +1,12 @@
+[package]
+name = "remich_gdext"
+version.workspace = true
+edition.workspace = true
+description = "Thin binding layer: the only place engine types may appear (docs/PLAN.md §1.2)."
+publish = false
+
+[dependencies]
+remich_core = { path = "../remich_core" }
+
+# No engine binding is declared here yet, on purpose. Which `gdext` version
+# supports the pinned engine is a Step 2 question, recorded in Step 2.

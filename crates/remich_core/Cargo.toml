@@ -1,0 +1,11 @@
+[package]
+name = "remich_core"
+version.workspace = true
+edition.workspace = true
+description = "Engine-free simulation core: the firewall side (docs/PLAN.md §1.2)."
+publish = false
+
+[dependencies]
+# Intentionally empty. This crate must never grow an engine dependency:
+# simulation cores stay plain Rust, and the thin binding above it is the only
+# place engine types may appear (docs/PLAN.md §1.2).
