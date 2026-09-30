@@ -152,14 +152,27 @@ else
     fail "cargo tree -p remich_core failed"
 fi
 
-other_pkgs="$(cargo metadata --format-version 1 2>/dev/null \
-    | jq -r '.packages[].name' 2>/dev/null \
-    | grep -viE '^(remich_core|remich_gdext)$' | sort -u)"
-engine_anywhere="$(printf '%s\n' "$other_pkgs" | grep -iE 'godot|gdext' || true)"
-if [ -n "$engine_anywhere" ]; then
-    fail "an engine binding crate is already in the workspace graph: $(printf '%s' "$engine_anywhere" | tr '\n' ' ')"
+# Step 1 had chosen no binding, so it asserted that NO engine crate appeared
+# anywhere in the workspace graph ("Step 2 chooses it"). Step 2 chooses it, so
+# total absence is no longer the rule — confinement is, and that is exactly what
+# keeps the firewall of §1.2 intact: an engine crate may now appear in the
+# graph, but only behind the binding crate. Every other workspace member must
+# still have an engine-free dependency closure.
+workspace_members="$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
+    | jq -r '.packages[].name' 2>/dev/null | sort -u)"
+engine_breaches=""
+for member in $workspace_members; do
+    if [ "$member" = "remich_gdext" ]; then
+        continue
+    fi
+    if cargo tree -p "$member" --edges normal,build 2>/dev/null | grep -qiE 'godot|gdext'; then
+        engine_breaches="$engine_breaches $member"
+    fi
+done
+if [ -n "$engine_breaches" ]; then
+    fail "an engine crate reaches a workspace member other than remich_gdext:$engine_breaches"
 else
-    pass "no engine binding crate anywhere in the workspace graph (Step 2 chooses it)"
+    pass "every workspace member except remich_gdext keeps an engine-free dependency closure"
 fi
 
 # ------------------------------------------------------ 4. build and tests
