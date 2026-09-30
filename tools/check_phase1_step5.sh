@@ -333,6 +333,103 @@ else
     cat "$LOG_DIR/validator.log" | sed 's/^/      | /'
 fi
 
+# A validator that accepts everything would also pass the check above, so nine
+# deliberately broken traces have to be rejected, each for its own reason.
+mutation_total="$(python3 - "$TRACE_ONE" "$LOG_DIR" <<'PY' 2>/dev/null
+import copy
+import json
+import os
+import sys
+
+source, out_dir = sys.argv[1], sys.argv[2]
+records = [json.loads(line) for line in open(source, encoding="utf-8") if line.strip()]
+
+
+def is_decision(record):
+    return record.get("type") == "decision"
+
+
+def at(records, checkpoint):
+    return next(r for r in records if is_decision(r) and r["checkpoint"] == checkpoint)
+
+
+def emit(name, subset):
+    path = os.path.join(out_dir, "mut-" + name + ".jsonl")
+    with open(path, "w", encoding="utf-8") as handle:
+        for record in subset:
+            handle.write(json.dumps(record) + "\n")
+
+
+cases = []
+
+cases.append(("missing-checkpoint",
+              [r for r in records if not (is_decision(r) and r["checkpoint"] == 11)]))
+
+scratch = copy.deepcopy(records)
+at(scratch, 5)["chosen"]["id"] = 99
+cases.append(("chosen-not-a-candidate", scratch))
+
+scratch = copy.deepcopy(records)
+at(scratch, 9)["needs"][0] = 0.99
+cases.append(("rising-need", scratch))
+
+scratch = copy.deepcopy(records)
+at(scratch, 4)["needs"][3] = 0.75
+cases.append(("moving-safety", scratch))
+
+scratch = copy.deepcopy(records)
+at(scratch, 17)["tick"] = 999
+cases.append(("wrong-tick", scratch))
+
+scratch = copy.deepcopy(records)
+summary = next(r for r in scratch if r.get("type") == "summary")
+summary["final_tick"] = 999
+summary["sequential_equals_direct"] = False
+cases.append(("wrong-final-state", scratch))
+
+scratch = copy.deepcopy(records)
+at(scratch, 2)["candidates"].reverse()
+cases.append(("reordered-candidates", scratch))
+
+scratch = copy.deepcopy(records)
+at(scratch, 8)["candidates"][0]["score"] = None
+cases.append(("non-finite-score", scratch))
+
+cases.append(("truncated", records[:5]))
+
+for name, subset in cases:
+    emit(name, subset)
+print(len(cases))
+PY
+)"
+if [ -n "$mutation_total" ] && [ "$mutation_total" -gt 0 ] 2>/dev/null; then
+    pass "the self-test generated $mutation_total deliberately broken traces"
+else
+    fail "the validator self-test could not generate its broken traces"
+    mutation_total=0
+fi
+
+rejected=0
+accepted=""
+for mutated in "$LOG_DIR"/mut-*.jsonl; do
+    [ -e "$mutated" ] || continue
+    name="$(basename "$mutated" .jsonl)"
+    if python3 "$VALIDATOR" "$mutated" >"$LOG_DIR/mut.log" 2>&1; then
+        accepted="$accepted $name"
+    else
+        rejected=$((rejected + 1))
+        first_fail="$(grep -m1 '^FAIL' "$LOG_DIR/mut.log" 2>/dev/null || true)"
+        note "$name rejected: ${first_fail:-no detail}"
+    fi
+done
+if [ -n "$accepted" ]; then
+    fail "the validator accepted a broken trace:$accepted"
+elif [ "$rejected" -eq "$mutation_total" ] && [ "$rejected" -gt 0 ]; then
+    pass "all $rejected deliberately broken traces are rejected — the validator is not vacuous"
+else
+    fail "only $rejected of $mutation_total broken traces were exercised"
+fi
+
 # -------------------------------------- 9. 24 checkpoints, 0..23, ticks 0..230
 header "9. Exactly 24 decision checkpoints, 0..23, at ticks 0,10,...,230"
 

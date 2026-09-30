@@ -349,7 +349,9 @@ The validator is also exercised against nine deliberately broken traces
 (removed checkpoint, chosen id not among candidates, a risen need, a moved
 safety, a wrong tick, a wrong final tick, reordered candidates, a non-finite
 score, a truncated file). Each one is rejected with a specific `FAIL` line, so
-the validator is not merely vacuous.
+the validator is not merely vacuous — and
+`tools/check_phase1_step5.sh` regenerates and re-runs that self-test on every
+acceptance run, so the claim is reproduced rather than merely asserted.
 
 ## 10. Reproducing
 
