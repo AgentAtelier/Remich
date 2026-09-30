@@ -6,6 +6,9 @@ description = "Engine-free simulation core: the firewall side (docs/PLAN.md §1.
 publish = false
 
 [dependencies]
-# Intentionally empty. This crate must never grow an engine dependency:
-# simulation cores stay plain Rust, and the thin binding above it is the only
-# place engine types may appear (docs/PLAN.md §1.2).
+# No engine dependency, ever: simulation cores stay plain Rust and the thin
+# binding above this crate is the only place engine types may appear
+# (docs/PLAN.md §1.2). Since Step 4 this crate also depends on the Step 3
+# donor import `anvil_sim` — which is engine-free too — because the adapter's
+# whole job is to call the donor scorer rather than re-implement it.
+anvil_sim = { path = "../anvil_sim" }

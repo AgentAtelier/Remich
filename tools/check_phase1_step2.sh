@@ -184,7 +184,13 @@ else
     pass "$CORE_DIR/src contains no engine API use"
 fi
 
-if cargo tree -p remich_core --edges normal,build >"$LOG_DIR/tree-core.txt" 2>/dev/null; then
+# The source-path annotation is stripped before grepping: `cargo tree` prints
+# each workspace package's absolute checkout path, and a checkout path that
+# contains the words `godot`/`gdext` is not an engine crate. Only crate
+# identity counts, and a real `├── godot v0.5.5` line is untouched by the
+# strip.
+if cargo tree -p remich_core --edges normal,build 2>/dev/null \
+        | sed -E 's/ \((path[+]file:)?\/[^)]*\)//g' >"$LOG_DIR/tree-core.txt"; then
     if grep -qiE 'godot|gdext' "$LOG_DIR/tree-core.txt"; then
         fail "cargo tree -p remich_core shows an engine crate (the firewall is broken):"
         grep -niE 'godot|gdext' "$LOG_DIR/tree-core.txt" | sed 's/^/      | /'
