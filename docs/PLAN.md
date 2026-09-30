@@ -53,8 +53,9 @@ ships to.
   determinism.
 - **Donor code is read-only:** `buggy-vault/repos/anvil/source` (main `97c8fdbd`) is copied into this
   repository with its provenance, never edited in place. Preserved sources may not build as they are
-  (a first build attempt on 2026-09-30 stopped at a missing module file in `anvil_sim`; not
-  investigated); making the copy build is part of the step that takes it.
+  (a first build attempt on 2026-09-30 stopped at `anvil_sim`'s `system/npc` module: its
+  `mod.rs` is present under the name `kimi_npc_mod.rs`, apparently renamed in an earlier AI session —
+  Observed, not yet fixed); making the copy build is part of the step that takes it.
 - **Munshausen and Larochette are the lead's** (§4, Y-R). Remich proves itself in its own test
   project.
 - Stop and ask the lead only for work in another repository, or a decision this plan does not make.
@@ -64,7 +65,7 @@ ships to.
 **What the owner sees at the end, honestly:** Ada in Larochette choosing her next activity (eat,
 rest, work, go out) from how hungry, tired or restless she is, computed by anvil's Rust scorer inside
 the game, instead of following a fixed timetable. It will not look better than today, and may look
-odder: anvil's formulas are a first pass (139 "for now / simplified" markers). The real result is two
+odder: anvil's formulas are a first pass (about 135–140 "for now / simplified / Sprint" markers in `anvil_sim`). The real result is two
 facts: **Rust runs inside the game**, and **how long a rebuild takes** after a one-line change.
 
 **Steps (the lane):**
