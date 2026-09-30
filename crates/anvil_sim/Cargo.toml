@@ -1,0 +1,14 @@
+[package]
+name = "anvil_sim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anvil_core = { path = "../anvil_core" }
+# Donor also declared anvil_world, glam, rapier3d, bincode and tracing here.
+# They belong to the simulation systems Step 3 does not take (world/runtime
+# state, physics, catastrophe, NPC systems) — removed as listed in
+# docs/anvil-import-phase1-step3.md. Nothing in the taken subset uses them.
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

@@ -51,11 +51,16 @@ ships to.
 - **Relaxed verification (owner, 2026-09-30):** the worker runs the step's tests once and posts the
   results; the monitor reviews and merges. No independent run by the lead. Sabotage checks only for
   determinism.
-- **Donor code is read-only:** `buggy-vault/repos/anvil/source` (main `97c8fdbd`) is copied into this
-  repository with its provenance, never edited in place. Preserved sources may not build as they are
-  (a first build attempt on 2026-09-30 stopped at `anvil_sim`'s `system/npc` module: its
-  `mod.rs` is present under the name `kimi_npc_mod.rs`, apparently renamed in an earlier AI session —
-  Observed, not yet fixed); making the copy build is part of the step that takes it.
+- **Donor code is read-only:** `buggy-vault/repos/anvil/source`, read from the vault repo's commit
+  `24181142c693be37f90a6a667a6dc493425cd832` (which preserves anvil main
+  `97c8fdbd7ff85779f33456fd7c444657f8d90b36`), is copied into this repository with its provenance,
+  never edited in place — no upstream fetch, no write to the vault. Provenance is recorded per file
+  as `buggy-vault@24181142 repos/anvil/source/<path>` in `docs/anvil-import-phase1-step3.md`.
+  Preserved sources may not build as they are (a first build attempt on 2026-09-30 stopped at
+  `anvil_sim`'s `system/npc` module: its `mod.rs` is present under the name `kimi_npc_mod.rs`,
+  apparently renamed in an earlier AI session — Observed, not yet fixed); Step 3 did not take
+  `system/npc`, so no repair was performed — making the copy build is part of the step that takes
+  it.
 - **Munshausen and Larochette are the lead's** (§4, Y-R). Remich proves itself in its own test
   project.
 - Stop and ask the lead only for work in another repository, or a decision this plan does not make.

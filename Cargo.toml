@@ -12,8 +12,20 @@ resolver = "2"
 members = [
     "crates/remich_core",
     "crates/remich_gdext",
+    # Phase 1, Step 3 — the anvil subset taken into Remich (docs/PLAN.md §4.3).
+    # Engine-free like the donor; provenance in docs/anvil-import-phase1-step3.md.
+    "crates/anvil_core",
+    "crates/anvil_sim",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+
+# Dependency versions for the imported anvil crates, mirroring the donor
+# workspace's [workspace.dependencies] (buggy-vault@24181142
+# repos/anvil/source/Cargo.toml) so the copied manifests stay unedited.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
