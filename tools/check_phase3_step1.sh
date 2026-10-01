@@ -83,9 +83,13 @@ RECORD_DOC="docs/remich-catalogue-phase3-step1.md"
 RELOCATION_PROOF="tools/check_catalogue_relocation.sh"
 STEP4_CHECKER="tools/check_phase2_step4.sh"
 PLAN_DOC="docs/PLAN.md"
-# The donor source `#[test]` count: 184 since this step added exactly one
-# catalogue test (183 was the frozen count at the import).
-EXPECTED_SOURCE_TESTS=184
+# The donor source `#[test]` count. 183 was the frozen count at the import;
+# this step added exactly one catalogue test (184); Phase 3 Step 2 — soul
+# primitives across the bridge then imported settlement/connection.rs (+3
+# donor tests) and settlement/ids.rs (+0), moving 184 -> 187. The four
+# numbers are recorded in docs/anvil-import-phase1-step3.md §6 and §11, and
+# no test was added, removed or weakened by hand.
+EXPECTED_SOURCE_TESTS=187
 # The historical ratchets issue #9 legitimately moved — all seven, no others.
 ADJUSTED_CHECKERS="tools/check_phase1_step3.sh tools/check_phase1_step4.sh
 tools/check_phase1_step5.sh tools/check_phase2_step1.sh
@@ -113,14 +117,46 @@ fi
 note "HEAD is $(git rev-parse HEAD)"
 
 # ---------------------------------------- 2. only the authorized file changed
-header "2. The authorized catalogue file is the only donor/data/engine file changed"
+header "2. Only the authorized files differ under crates/, assets/ and godot/"
+
+# Remich issue #9 / Phase 3 Step 1: $CATALOGUE is the authorized catalogue
+# embedding, and this ratchet was written so that nothing else under the
+# donor crates, the data or the project could move.
+# Phase 3 Step 2 — soul primitives across the bridge: seven exact files are
+# named exceptions — the two byte-identical donor files, the module root that
+# declares them, the engine-free soul facade and its crate root, the binding
+# that exposes the new class, and the standalone probe. Nothing else may
+# differ from the Phase 3 plan merge, the catalogue must still be among the
+# changed files, and each named file is proved byte-identical to its donor
+# (or explicitly adapted) by tools/check_phase1_step3.sh.
+P3S2_BEHAVIOUR_FILES=(
+    crates/anvil_sim/src/settlement/connection.rs
+    crates/anvil_sim/src/settlement/ids.rs
+    crates/anvil_sim/src/settlement/mod.rs
+    crates/remich_core/src/lib.rs
+    crates/remich_core/src/soul.rs
+    crates/remich_gdext/src/lib.rs
+    godot/soul_probe.gd
+)
+behaviour_filters=(-e "$CATALOGUE")
+for p3s2_file in "${P3S2_BEHAVIOUR_FILES[@]}"; do
+    behaviour_filters+=(-e "$p3s2_file")
+done
 
 behaviour_delta="$(git diff --name-only "$PLAN_MERGE" -- crates/ assets/ godot/ 2>/dev/null)"
-if [ "$behaviour_delta" = "$CATALOGUE" ]; then
-    pass "only $CATALOGUE differs under crates/, assets/ and godot/"
+unauthorised="$(printf '%s\n' "$behaviour_delta" \
+    | grep -vxF "${behaviour_filters[@]}" | sed '/^$/d' || true)"
+if [ -z "$unauthorised" ] \
+        && printf '%s\n' "$behaviour_delta" | grep -qxF "$CATALOGUE"; then
+    pass "only $CATALOGUE and the seven named Phase 3 Step 2 files differ under crates/, assets/ and godot/"
 else
-    fail "the files changed under crates/, assets/ and godot/ are:"
-    printf '%s\n' "${behaviour_delta:-<none>}" | sed 's/^/      | /'
+    if [ -n "$unauthorised" ]; then
+        fail "unauthorised files changed under crates/, assets/ and godot/:"
+        printf '%s\n' "$unauthorised" | sed 's/^/      | /'
+    fi
+    if ! printf '%s\n' "$behaviour_delta" | grep -qxF "$CATALOGUE"; then
+        fail "the authorized $CATALOGUE no longer differs from the plan merge"
+    fi
 fi
 
 # ------------------------------------------------------------- 3. asset bytes
