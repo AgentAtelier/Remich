@@ -78,10 +78,19 @@ STEP3_DOC="docs/anvil-import-phase1-step3.md"
 PLAN_DOC="docs/PLAN.md"
 # Remich issue #9 / Phase 3 Step 1 (the embedded action catalogue): the one
 # donor file this step is authorized to change, and the lead's Phase 3 plan
-# merge, at which docs/PLAN.md is now frozen (that merge extended the plan
-# after PHASE2_PLAN_MERGE, so the plan can no longer match it byte for byte).
+# merge (that merge extended the plan after PHASE2_PLAN_MERGE, so the plan
+# can no longer match it byte for byte). docs/PLAN.md's freeze point is
+# PLAN_FREEZE below — the lead's Phase 3 Step 2 re-scope.
 N9_CATALOGUE="crates/anvil_sim/src/actions/catalogue.rs"
 PLAN_MERGE="cfa796cc4885432da93b1974602ef3ba9a7cbff8"
+# Remich Phase 3 Step 2 — soul primitives across the bridge (the lead's
+# docs-only plan re-scope, 2026-10-01): docs/PLAN.md's byte-for-byte freeze
+# point moved from $PLAN_MERGE to the commit that made the amendment, so plan
+# content is compared against PLAN_FREEZE below. $PLAN_MERGE stays the
+# ancestry base and the checker-freeze base. Any further edit to the plan
+# still fails these checks; re-pin PLAN_FREEZE only for an authorized
+# amendment.
+PLAN_FREEZE="02eff4214c97d31743e7486a9d905fa5c22541a6"
 
 COMMITTED_CLOCK_REV="remich-clock-v1"
 # The rebuild-measurement sentinel, spelled so this script never trips its own
@@ -145,18 +154,19 @@ fi
 # Remich issue #9 / Phase 3 Step 1: two named exceptions — the authorized
 # catalogue embedding and the provenance record that documents it (its
 # content is guarded by the Step 3 sub-check above). docs/PLAN.md was
-# extended by the lead's Phase 3 plan merge after this base, so it is frozen
-# byte-for-byte at that merge instead, which still forbids rewriting it here.
+# extended by the lead's Phase 3 plan merge after this base, then amended by
+# the lead's Phase 3 Step 2 re-scope, so it is frozen byte-for-byte at
+# $PLAN_FREEZE instead, which still forbids rewriting it here.
 donor_delta="$(git diff --name-only "$PHASE2_PLAN_MERGE" -- \
     crates/anvil_sim crates/anvil_core assets "$STEP3_DOC" 2>/dev/null \
     | grep -vxF "$N9_CATALOGUE" | grep -vxF "$STEP3_DOC" || true)"
 plan_delta=""
-if ! git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
+if ! git diff --quiet "$PLAN_FREEZE" -- "$PLAN_DOC" 2>/dev/null; then
     plan_delta="$PLAN_DOC"
 fi
 combined="$(printf '%s\n%s\n' "$donor_delta" "$plan_delta" | sed '/^$/d')"
 if [ -z "$combined" ]; then
-    pass "donor crates and data are unchanged but for the authorized $N9_CATALOGUE, the provenance record documents it, and docs/PLAN.md matches the plan merge"
+    pass "donor crates and data are unchanged but for the authorized $N9_CATALOGUE, the provenance record documents it, and docs/PLAN.md matches the plan re-scope freeze"
 else
     fail "donor code/data, provenance or the plan changed beyond the Remich #9 authorization:"
     printf '%s\n' "$combined" | sed 's/^/      | /'

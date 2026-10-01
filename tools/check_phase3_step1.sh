@@ -60,9 +60,16 @@ set -uo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 cd "$REPO_ROOT" || exit 1
 
-# The lead's Phase 3 plan merge: the base of this step, and from now on the
-# byte-for-byte freeze point of docs/PLAN.md for every earlier ratchet.
+# The lead's Phase 3 plan merge: the base of this step — ancestry, the
+# donor/asset comparison, and the freeze base of every historical checker.
 PLAN_MERGE="cfa796cc4885432da93b1974602ef3ba9a7cbff8"
+# Remich Phase 3 Step 2 — soul primitives across the bridge (the lead's
+# docs-only plan re-scope, 2026-10-01): docs/PLAN.md's byte-for-byte freeze
+# point moved from $PLAN_MERGE to the commit that made the amendment, so plan
+# content is compared against PLAN_FREEZE. Any further edit to the plan still
+# fails the plan check below; re-pin PLAN_FREEZE only for an authorized
+# amendment.
+PLAN_FREEZE="02eff4214c97d31743e7486a9d905fa5c22541a6"
 VAULT="/home/mrg/Documents/Project/buggy-vault"
 VAULT_COMMIT="24181142c693be37f90a6a667a6dc493425cd832"
 DATA_SHA="166104ba90e30446adfb8d15ec6e242a52567c979bccb274a7011296b163dba5"
@@ -378,10 +385,10 @@ else
     fi
 fi
 
-if git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
-    pass "docs/PLAN.md is byte-identical to the Phase 3 plan merge"
+if git diff --quiet "$PLAN_FREEZE" -- "$PLAN_DOC" 2>/dev/null; then
+    pass "docs/PLAN.md is byte-identical to the lead's docs-only Phase 3 Step 2 re-scope"
 else
-    fail "docs/PLAN.md was rewritten since the Phase 3 plan merge"
+    fail "docs/PLAN.md was rewritten since the lead's Phase 3 Step 2 re-scope $PLAN_FREEZE"
 fi
 
 # ------------------------------------- 17. the previous acceptance chain is green

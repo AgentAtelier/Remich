@@ -108,13 +108,21 @@ PLAN_DOC="docs/PLAN.md"
 # Remich issue #9 / Phase 3 Step 1 (the embedded action catalogue): the one
 # donor file that step is authorized to change, the provenance record that
 # documents it, its own result record, the checkers whose ratchets it
-# legitimately moved, and the lead's Phase 3 plan merge — at which
-# docs/PLAN.md is now frozen, because that merge extended the plan after
-# $STEP3_MERGE.
+# legitimately moved, and the lead's Phase 3 plan merge (which extended the
+# plan after $STEP3_MERGE). docs/PLAN.md's freeze point is PLAN_FREEZE
+# below — the lead's Phase 3 Step 2 re-scope.
 N9_CATALOGUE="crates/anvil_sim/src/actions/catalogue.rs"
 N9_PROVENANCE="docs/anvil-import-phase1-step3.md"
 N9_RECORD="docs/remich-catalogue-phase3-step1.md"
 PLAN_MERGE="cfa796cc4885432da93b1974602ef3ba9a7cbff8"
+# Remich Phase 3 Step 2 — soul primitives across the bridge (the lead's
+# docs-only plan re-scope, 2026-10-01): docs/PLAN.md's byte-for-byte freeze
+# point moved from $PLAN_MERGE to the commit that made the amendment, so plan
+# content is compared against PLAN_FREEZE below. $PLAN_MERGE stays the
+# ancestry base, the checker-freeze base and the donor/asset comparison base.
+# Any further edit to the plan still fails these checks; re-pin PLAN_FREEZE
+# only for an authorized amendment.
+PLAN_FREEZE="02eff4214c97d31743e7486a9d905fa5c22541a6"
 
 COMMITTED_SCORER_REV="remich-scorer-v1"
 # The rebuild-measurement sentinel, spelled so this script never trips its
@@ -218,8 +226,9 @@ fi
 # (inventory counts, the donor byte rule, the frozen source-test count and
 # the donor/record/plan freezes), each edited with a comment naming this
 # issue. docs/PLAN.md was extended by the lead's Phase 3 plan merge after
-# the Step 3 merge, so it is frozen byte-for-byte at that merge instead —
-# which still forbids this step from rewriting it. Every other frozen file
+# the Step 3 merge, then amended by the lead's Phase 3 Step 2 re-scope, so it
+# is frozen byte-for-byte at $PLAN_FREEZE instead — which still forbids this
+# step from rewriting it. Every other frozen file
 # must match $STEP3_MERGE exactly.
 frozen_delta="$(git diff --name-only "$STEP3_MERGE" -- \
     "$STEP3_CHECKER" tools/check_phase2_step1.sh tools/check_phase2_step2.sh \
@@ -240,18 +249,19 @@ frozen_delta="$(git diff --name-only "$STEP3_MERGE" -- \
         -e tools/check_phase2_step2.sh -e tools/check_phase1_step3.sh \
         -e tools/check_phase1_step4.sh -e tools/check_phase1_step5.sh || true)"
 plan_delta=""
-if ! git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
+if ! git diff --quiet "$PLAN_FREEZE" -- "$PLAN_DOC" 2>/dev/null; then
     plan_delta="$PLAN_DOC"
 fi
 combined="$(printf '%s\n%s\n' "$frozen_delta" "$plan_delta" | sed '/^$/d')"
 if [ -z "$combined" ]; then
-    pass "every earlier checker, validator, harness and probe differs only by its named Remich #9 edit, and docs/PLAN.md matches the plan merge"
+    pass "every earlier checker, validator, harness and probe differs only by its named Remich #9 edit, and docs/PLAN.md matches the plan re-scope freeze"
 else
     fail "a frozen checker, harness, probe or the plan changed beyond the Remich #9 authorization:"
     printf '%s\n' "$combined" | sed 's/^/      | /'
 fi
 
-# docs/PLAN.md (lead's Phase 3 plan merge) plus the two records Remich #9
+# docs/PLAN.md (the lead's Phase 3 plan merge and its docs-only Phase 3 Step 2
+# re-scope) plus the two records Remich #9
 # requires: the provenance record it amends, and this step's own result
 # record. Nothing else under docs/ may differ from the Step 3 merge.
 doc_delta="$(git diff --name-only "$STEP3_MERGE" -- 'docs/*.md' 2>/dev/null \
@@ -263,10 +273,10 @@ else
     fail "an earlier record changed since the Step 3 merge:"
     printf '%s\n' "$doc_delta" | sed 's/^/      | /'
 fi
-if git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
-    pass "docs/PLAN.md is byte-identical to the lead's Phase 3 plan merge $PLAN_MERGE"
+if git diff --quiet "$PLAN_FREEZE" -- "$PLAN_DOC" 2>/dev/null; then
+    pass "docs/PLAN.md is byte-identical to the lead's docs-only Phase 3 Step 2 re-scope $PLAN_FREEZE"
 else
-    fail "docs/PLAN.md was rewritten since the Phase 3 plan merge $PLAN_MERGE"
+    fail "docs/PLAN.md was rewritten since the lead's Phase 3 Step 2 re-scope $PLAN_FREEZE"
 fi
 
 autoload_order="$(grep -E '^(Marker|ScorerProbe|WorldClock|Weather|DayProbe|ClockProbe|BridgeProbe|WeatherProbe|SaveProbe)=' \
@@ -308,19 +318,19 @@ header "3. Donor code/data and provenance remain untouched, bar the authorized R
 
 # Remich issue #9 / Phase 3 Step 1: two named exceptions — the authorized
 # catalogue embedding, and the provenance record that documents it (guarded
-# by the Step 3 sub-check). docs/PLAN.md is frozen byte-for-byte at the
-# lead's Phase 3 plan merge.
+# by the Step 3 sub-check). docs/PLAN.md is frozen byte-for-byte at
+# $PLAN_FREEZE, the lead's Phase 3 Step 2 re-scope.
 donor_delta="$(git diff --name-only "$STEP3_MERGE" -- \
     crates/anvil_sim crates/anvil_core assets docs/anvil-import-phase1-step3.md \
     2>/dev/null \
     | grep -vxF -e "$N9_CATALOGUE" -e "$N9_PROVENANCE" || true)"
 plan_delta=""
-if ! git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
+if ! git diff --quiet "$PLAN_FREEZE" -- "$PLAN_DOC" 2>/dev/null; then
     plan_delta="$PLAN_DOC"
 fi
 combined="$(printf '%s\n%s\n' "$donor_delta" "$plan_delta" | sed '/^$/d')"
 if [ -z "$combined" ]; then
-    pass "donor crates and data are unchanged but for the authorized $N9_CATALOGUE, the provenance record documents it, and the plan matches the plan merge"
+    pass "donor crates and data are unchanged but for the authorized $N9_CATALOGUE, the provenance record documents it, and the plan matches the plan re-scope freeze"
 else
     fail "donor code/data, provenance or the plan changed beyond the Remich #9 authorization:"
     printf '%s\n' "$combined" | sed 's/^/      | /'
