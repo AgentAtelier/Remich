@@ -17,6 +17,8 @@
 //!   ticks advance.
 //! * [`clock`] — the one world clock: integer ticks, a fixed integer tick
 //!   length, pause and speed (Phase 2, Step 1).
+//! * [`weather`] — the one weather snapshot: plain data, one writer, readers
+//!   everywhere, plus the small stand-in driver (Phase 2, Step 2).
 
 /// The name this crate answers to across the boundary.
 pub const CORE_NAME: &str = "remich_core";
@@ -27,6 +29,8 @@ pub mod decay;
 pub mod clock;
 /// Plain-data scoring: the adapter over the donor's utility scorer.
 pub mod scorer;
+/// The one weather snapshot: one writer, plain-data reads, stand-in driver.
+pub mod weather;
 
 #[cfg(test)]
 mod tests {

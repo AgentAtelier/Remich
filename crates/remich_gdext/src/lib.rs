@@ -12,11 +12,15 @@
 //! here computes a score, re-implements a donor formula, or decides anything.
 //! The simulated day itself is Step 5 (docs/PLAN.md).
 
+use godot::classes::RenderingServer;
 use godot::prelude::*;
 
 use remich_core::clock::WorldClock;
 use remich_core::decay::advance_needs;
 use remich_core::scorer::{self, ScorerInput, ScorerOutcome};
+use remich_core::weather::{
+    StandInWeather, WeatherChannel, WeatherError, WeatherSnapshot, STAND_IN_DRIVER_ID,
+};
 
 /// The single value Remich's bridge probe hands to Godot.
 ///
@@ -48,6 +52,29 @@ pub const SCORER_BRIDGE_REV: &str = "remich-scorer-v1";
 /// `tools/check_phase2_step1.sh` fails if any value other than the committed
 /// one survives outside documentation.
 pub const CLOCK_BRIDGE_REV: &str = "remich-clock-v1";
+
+/// The revision marker carried by the shared weather node.
+///
+/// The same stale-library guard as the three markers above, for the weather
+/// channel: `godot/weather_probe.gd` checks the value Godot observes against
+/// `godot/weather_probe_expectation.txt`, which `tools/stage_weather.sh`
+/// derives from this line. Phase 2 Step 2's rebuild measurement changes
+/// exactly this line to `v2`, times the rebuild-through-engine path, and
+/// restores it; `tools/check_phase2_step2.sh` fails if any value other than
+/// the committed one survives outside documentation.
+pub const WEATHER_BRIDGE_REV: &str = "remich-weather-v1";
+
+/// The one shader global this binding writes.
+///
+/// The name, type and default come from Grengewald's pinned contract
+/// (`AgentAtelier/Grengewald@95fa08e45c919e93d62d3940f2dea032f1b724e3`,
+/// `docs/GODOT.md`, standing ruling 1 — recorded in
+/// `docs/remich-weather-phase2-step2.md`): a `vec4` named `grengewald_wind`
+/// whose X/Y are world X/Z direction, Z is gentle displacement in metres, and
+/// W is the game-supplied motion phase. The declaration itself lives in
+/// `godot/project.godot`; the live write goes through Godot's real runtime
+/// setter, exactly as Grengewald documents for its own use.
+pub const WIND_GLOBAL_NAME: &str = "grengewald_wind";
 
 /// The layer's own name, mirrored from the engine-free side of the boundary.
 pub const LAYER_NAME: &str = "remich_gdext";
@@ -419,6 +446,368 @@ fn clock_failure(code: &str, message: &str) -> VarDictionary {
 }
 
 // ---------------------------------------------------------------------------
+// The one weather snapshot, exposed as one shared node (Phase 2, Step 2).
+//
+// The native object owns the Rust-held channel: one writer, everyone else
+// reads. Godot keeps no second copy of tick, wind, rain, temperature or
+// light — every read here goes straight to `remich_core::weather`, and every
+// publish goes through the stand-in driver that owns the channel. There is
+// no setter for arbitrary weather values: `drive` takes the integer world
+// tick and publishes what the fixture schedule says for that tick, nothing
+// else.
+// ---------------------------------------------------------------------------
+
+/// The presentation phase passed to the wind global's W component, in
+/// radians: a **pure function of the integer tick and the caller's explicit
+/// cycle length** — `2π * (tick mod cycle) / cycle`.
+///
+/// This is presentation/test-fixture behaviour (docs/remich-weather-
+/// phase2-step2.md), not weather and not saved state: the motion phase is
+/// Grengewald's renderer-facing input, and it deliberately does not live in
+/// the weather snapshot. No time is accumulated to produce it.
+fn presentation_phase(tick: u64, cycle_length: u64) -> f64 {
+    if cycle_length == 0 {
+        return 0.0;
+    }
+    let phase = tick % cycle_length;
+    phase as f64 / cycle_length as f64 * std::f64::consts::TAU
+}
+
+/// The exact vector the wind global is written with, derived from the
+/// snapshot: X ← direction X, Y ← direction Z, Z ← wind strength adapted to
+/// Grengewald's gentle 0..1 metre displacement input (the fixture strength
+/// already lives in that range, so the adaptation is a clamp at the edge),
+/// W ← the presentation phase of the snapshot's integer tick.
+fn wind_vector(snapshot: &WeatherSnapshot, cycle_length: u64) -> [f64; 4] {
+    [
+        snapshot.wind_dir_x,
+        snapshot.wind_dir_z,
+        snapshot.wind_strength.clamp(0.0, 1.0),
+        presentation_phase(snapshot.tick, cycle_length),
+    ]
+}
+
+/// The shared weather node: the one place Godot reaches the Rust-held
+/// snapshot.
+///
+/// One instance exists in the test project (`godot/weather.gd`, the `Weather`
+/// autoload). `initialize` is the only way in, and it claims the channel for
+/// the stand-in driver — a second initialization is refused rather than
+/// replacing the first. `drive` publishes for a supplied integer world tick
+/// (the ticks come from the shared world clock; this class never advances
+/// time itself), `snapshot`/`writer_status` are plain reads, and
+/// `apply_wind` performs the one live write of the Grengewald wind global
+/// from the current snapshot through the engine's real setter.
+#[derive(GodotClass)]
+#[class(base = Node)]
+pub struct RemichWeather {
+    base: Base<Node>,
+    /// The one authoritative weather channel. Created once by
+    /// [`Self::initialize`]; nobody outside it ever mutates weather.
+    channel: Option<WeatherChannel>,
+    /// The fixture driver that owns the channel (seed + cycle length only).
+    stand_in: Option<StandInWeather>,
+    /// Instrumentation: the exact `vec4` handed to the shader-global setter
+    /// on the most recent [`Self::apply_wind`], in the setter's own
+    /// 32-bit-rounded components. Read back by the probe as the applied
+    /// vector; empty before the first apply.
+    last_applied: Option<[f64; 4]>,
+}
+
+#[godot_api]
+impl INode for RemichWeather {
+    fn init(base: Base<Node>) -> Self {
+        Self {
+            base,
+            channel: None,
+            stand_in: None,
+            last_applied: None,
+        }
+    }
+}
+
+#[godot_api]
+impl RemichWeather {
+    /// Creates the one weather channel and claims it for the stand-in
+    /// driver. A second initialization is refused — the stand-in's seed and
+    /// cycle are fixture constants of a run, never swapped under a live
+    /// channel.
+    #[func]
+    fn initialize(&mut self, seed: i64, cycle_length: i64) -> VarDictionary {
+        if self.channel.is_some() {
+            return weather_failure(
+                "already-initialized",
+                "the weather channel is created once, like the clock",
+            );
+        }
+        if seed < 0 {
+            return weather_failure("bad-input", "seed must not be negative");
+        }
+        if cycle_length <= 0 {
+            return weather_failure("bad-input", "cycle length must be at least 1 tick");
+        }
+        let stand_in = match StandInWeather::new(seed as u64, cycle_length as u64) {
+            Ok(stand_in) => stand_in,
+            Err(error) => return weather_refusal(&error),
+        };
+        let mut channel = WeatherChannel::new();
+        if let Err(error) = stand_in.attach(&mut channel) {
+            return weather_refusal(&error);
+        }
+        self.channel = Some(channel);
+        self.stand_in = Some(stand_in);
+        self.last_applied = None;
+
+        let mut result = VarDictionary::new();
+        result.set("ok", true);
+        result.set("bridge_rev", WEATHER_BRIDGE_REV);
+        result.set("writer", STAND_IN_DRIVER_ID);
+        result.set("seed", seed);
+        result.set("cycle_length", cycle_length);
+        result
+    }
+
+    /// Whether [`Self::initialize`] has succeeded yet.
+    #[func]
+    fn is_initialized(&self) -> bool {
+        self.channel.is_some()
+    }
+
+    /// The stand-in driver's seed. `-1` before initialization.
+    #[func]
+    fn seed(&self) -> i64 {
+        match self.stand_in {
+            Some(stand_in) => stand_in.seed() as i64,
+            None => -1,
+        }
+    }
+
+    /// The explicit cycle length in integer ticks. `-1` before
+    /// initialization.
+    #[func]
+    fn cycle_length(&self) -> i64 {
+        match self.stand_in {
+            Some(stand_in) => stand_in.cycle_length() as i64,
+            None => -1,
+        }
+    }
+
+    /// Publishes the stand-in snapshot for the supplied **integer world
+    /// tick** and returns it. The tick comes from the shared world clock;
+    /// this call never advances time, never reads a delta and never generates
+    /// a value of its own — it is `seed + tick` and nothing else. Refused
+    /// (with the conflict named) if the channel is not owned by the stand-in
+    /// driver.
+    #[func]
+    fn drive(&mut self, tick: i64) -> VarDictionary {
+        if tick < 0 {
+            return weather_failure("bad-input", "tick must not be negative");
+        }
+        let (Some(channel), Some(stand_in)) = (self.channel.as_mut(), self.stand_in.as_ref())
+        else {
+            return weather_failure("not-initialized", "call initialize first");
+        };
+        match stand_in.drive(channel, tick as u64) {
+            Ok(snapshot) => snapshot_dictionary(&snapshot, stand_in.seed()),
+            Err(error) => weather_refusal(&error),
+        }
+    }
+
+    /// The latest published snapshot, read straight from the Rust channel.
+    /// `ok=false` with code `no-snapshot` before the first publish. Reading
+    /// never claims the channel and never writes.
+    #[func]
+    fn snapshot(&self) -> VarDictionary {
+        let Some(channel) = self.channel.as_ref() else {
+            return weather_failure("not-initialized", "call initialize first");
+        };
+        match channel.read() {
+            Some(snapshot) => snapshot_dictionary(&snapshot, self.seed().max(0) as u64),
+            None => weather_failure("no-snapshot", "no snapshot has been published yet"),
+        }
+    }
+
+    /// The channel's writer identity — `""` before initialization.
+    #[func]
+    fn writer_id(&self) -> GString {
+        match &self.channel {
+            Some(channel) => channel.writer_id().unwrap_or_default().into(),
+            None => GString::new(),
+        }
+    }
+
+    /// The full ownership status a reader may inspect: who owns the channel,
+    /// whether a snapshot exists, and the tick that snapshot applies to
+    /// (`-1` when there is none).
+    #[func]
+    fn writer_status(&self) -> VarDictionary {
+        let mut result = VarDictionary::new();
+        result.set("ok", true);
+        result.set("bridge_rev", WEATHER_BRIDGE_REV);
+        match &self.channel {
+            None => {
+                result.set("owned", false);
+                result.set("writer", "");
+                result.set("has_snapshot", false);
+                result.set("snapshot_tick", -1);
+            }
+            Some(channel) => {
+                result.set("owned", channel.is_owned());
+                result.set("writer", channel.writer_id().unwrap_or_default());
+                let latest = channel.read();
+                result.set("has_snapshot", latest.is_some());
+                result.set(
+                    "snapshot_tick",
+                    latest.map(|s| s.tick as i64).unwrap_or(-1),
+                );
+            }
+        }
+        result
+    }
+
+    /// A writer-ownership probe: lets the test project *attempt* a claim as a
+    /// distinct identity. The attempt goes through the same channel API as
+    /// everything else, so it cannot bypass the one-writer rule — it exists
+    /// so acceptance can watch a second writer be refused from the engine
+    /// side, with the conflict named on both sides.
+    #[func]
+    fn try_claim_writer(&mut self, writer: GString) -> VarDictionary {
+        let Some(channel) = self.channel.as_mut() else {
+            return weather_failure("not-initialized", "call initialize first");
+        };
+        match channel.claim_writer(&writer.to_string()) {
+            Ok(()) => {
+                let mut result = VarDictionary::new();
+                result.set("ok", true);
+                result.set("bridge_rev", WEATHER_BRIDGE_REV);
+                result.set("writer", channel.writer_id().unwrap_or_default());
+                result
+            }
+            Err(error) => weather_refusal(&error),
+        }
+    }
+
+    /// Writes the Grengewald wind global from the **current snapshot**
+    /// through the engine's real runtime setter
+    /// (`RenderingServer.global_shader_parameter_set`), and returns the exact
+    /// vector that was applied — also kept as instrumentation for
+    /// [`Self::last_applied_wind`]. Refused when no snapshot exists. This is
+    /// the binding's one live render write; the snapshot itself never
+    /// becomes renderer-specific.
+    #[func]
+    fn apply_wind(&mut self) -> VarDictionary {
+        let (Some(channel), Some(stand_in)) = (&self.channel, self.stand_in) else {
+            return weather_failure("not-initialized", "call initialize first");
+        };
+        let Some(snapshot) = channel.read() else {
+            return weather_failure("no-snapshot", "no snapshot has been published yet");
+        };
+
+        let [x, y, z, w] = wind_vector(&snapshot, stand_in.cycle_length());
+        // Godot's `vec4` (and Grengewald's shader) is 32-bit: convert once,
+        // at this edge, and record the rounded components — the setter's
+        // argument exactly — rather than the unrounded inputs.
+        let vector = Vector4::new(x as f32, y as f32, z as f32, w as f32);
+        let applied = [
+            f64::from(vector.x),
+            f64::from(vector.y),
+            f64::from(vector.z),
+            f64::from(vector.w),
+        ];
+        let variant = vector.to_variant();
+        let mut rendering = RenderingServer::singleton();
+        rendering.global_shader_parameter_set(WIND_GLOBAL_NAME, &variant);
+        self.last_applied = Some(applied);
+
+        let mut result = VarDictionary::new();
+        result.set("ok", true);
+        result.set("bridge_rev", WEATHER_BRIDGE_REV);
+        result.set("tick", snapshot.tick as i64);
+        let mut applied_array = VarArray::new();
+        for value in applied {
+            applied_array.push(value);
+        }
+        result.set("applied", &applied_array);
+        result
+    }
+
+    /// The exact vector handed to the wind-global setter on the most recent
+    /// [`Self::apply_wind`] (four 32-bit-rounded components: X, Y, Z, W).
+    /// Empty before the first apply. Instrumentation for the probe — the
+    /// engine's runtime global getter is editor-only in the compatibility
+    /// backend, so this recorded argument is how the applied vector is read
+    /// back.
+    #[func]
+    fn last_applied_wind(&self) -> VarArray {
+        let mut applied_array = VarArray::new();
+        if let Some(applied) = self.last_applied {
+            for value in applied {
+                applied_array.push(value);
+            }
+        }
+        applied_array
+    }
+
+    /// The revision marker this library was built with, on its own.
+    #[func]
+    fn weather_bridge_rev(&self) -> GString {
+        WEATHER_BRIDGE_REV.into()
+    }
+}
+
+/// The published snapshot as plain Godot data. Plain reads only: this is the
+/// same Rust struct the channel holds, handed across the boundary.
+fn snapshot_dictionary(snapshot: &WeatherSnapshot, seed: u64) -> VarDictionary {
+    let mut result = VarDictionary::new();
+    result.set("ok", true);
+    result.set("bridge_rev", WEATHER_BRIDGE_REV);
+    result.set("seed", seed as i64);
+    result.set("tick", snapshot.tick as i64);
+    result.set("wind_dir_x", snapshot.wind_dir_x);
+    result.set("wind_dir_z", snapshot.wind_dir_z);
+    result.set("wind_strength", snapshot.wind_strength);
+    result.set("rain", snapshot.rain);
+    result.set("temperature", snapshot.temperature);
+    result.set("light", snapshot.light);
+    result
+}
+
+/// A refused weather request: says why, substitutes nothing. An ownership
+/// conflict additionally carries both identities, so the refusal names the
+/// conflict instead of merely reporting failure.
+fn weather_refusal(error: &WeatherError) -> VarDictionary {
+    let code = match error {
+        WeatherError::WriterConflict { .. } => "writer-conflict",
+        WeatherError::EmptyWriterId | WeatherError::PublishWithoutWriter => "writer-ownership",
+        WeatherError::NonFinite { .. }
+        | WeatherError::NegativeWindStrength
+        | WeatherError::ZeroCycleLength => "invalid-snapshot",
+    };
+    godot_error!("RemichWeather: {code}: {error}");
+    let mut result = VarDictionary::new();
+    result.set("ok", false);
+    result.set("bridge_rev", WEATHER_BRIDGE_REV);
+    result.set("code", code);
+    result.set("error", error.to_string());
+    if let WeatherError::WriterConflict { held_by, attempted } = error {
+        result.set("held_by", held_by.clone());
+        result.set("attempted", attempted.clone());
+    }
+    result
+}
+
+/// A refused weather setup: says why, substitutes nothing.
+fn weather_failure(code: &str, message: &str) -> VarDictionary {
+    godot_error!("RemichWeather: {code}: {message}");
+    let mut result = VarDictionary::new();
+    result.set("ok", false);
+    result.set("bridge_rev", WEATHER_BRIDGE_REV);
+    result.set("code", code);
+    result.set("error", message);
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Plain-data conversion. This is the whole of this layer's work: no scoring,
 // no defaults beyond the three documented above, no inference.
 // ---------------------------------------------------------------------------
@@ -654,6 +1043,143 @@ mod tests {
     fn clock_bridge_rev_is_the_committed_marker() {
         assert_eq!(CLOCK_BRIDGE_REV, "remich-clock-v1");
         assert!(CLOCK_BRIDGE_REV.starts_with("remich-clock-"));
+    }
+
+    /// The weather revision marker is the one line Step 2's rebuild
+    /// measurement changes (`v1` -> `v2`, then restored), so it must keep the
+    /// shape `tools/stage_weather.sh` parses and hold the committed value.
+    #[test]
+    fn weather_bridge_rev_is_the_committed_marker() {
+        assert_eq!(WEATHER_BRIDGE_REV, "remich-weather-v1");
+        assert!(WEATHER_BRIDGE_REV.starts_with("remich-weather-"));
+    }
+
+    /// The pinned Grengewald contract (standing ruling 1): exactly this
+    /// global name, declared as `vec4` with default `Vector4(1,0,0,0)` in
+    /// `godot/project.godot` and written here.
+    #[test]
+    fn the_wind_global_matches_the_pinned_grengewald_contract() {
+        assert_eq!(WIND_GLOBAL_NAME, "grengewald_wind");
+        let project = include_str!("../../../godot/project.godot");
+        assert!(project.contains("[shader_globals]"));
+        assert!(project.contains("grengewald_wind={"));
+        assert!(project.contains("\"type\": \"vec4\""));
+        assert!(project.contains("\"value\": Vector4(1, 0, 0, 0)"));
+    }
+
+    /// The mapping: the vector's weather-controlled components come from the
+    /// snapshot, and W alone is the presentation phase. X ← direction X,
+    /// Y ← direction Z, Z ← strength clamped into Grengewald's 0..1 metre
+    /// displacement range, W ← `2π·(tick mod cycle)/cycle`.
+    #[test]
+    fn the_wind_vector_reads_the_snapshot_and_the_tick_only() {
+        let snapshot = WeatherSnapshot::new(60, 0.0, 1.0, 0.7, 0.1, 19.0, 0.85)
+            .expect("valid fixture values");
+        let [x, y, z, w] = wind_vector(&snapshot, 240);
+        assert_eq!(x, 0.0, "global X is the snapshot's direction X");
+        assert_eq!(y, 1.0, "global Y is the snapshot's direction Z");
+        assert_eq!(z, 0.7, "global Z is the snapshot's wind strength");
+        assert_eq!(w, presentation_phase(60, 240), "global W is presentation");
+        assert!((z - snapshot.wind_strength).abs() < f64::EPSILON);
+        // The weather-controlled components depend only on the snapshot:
+        // changing the cycle changes W and nothing else.
+        let [_, _, z_other, w_other] = wind_vector(&snapshot, 120);
+        assert_eq!(z_other, z, "strength never depends on the cycle");
+        assert_ne!(w_other, w, "the phase does depend on the cycle (presentation)");
+    }
+
+    /// W is presentation, derived from the integer tick — never accumulated
+    /// time, never stored as weather state. It wraps inside `[0, 2π)`,
+    /// repeats every cycle, and two calls with the same inputs agree.
+    #[test]
+    fn the_motion_phase_is_presentation_from_the_integer_tick() {
+        assert_eq!(presentation_phase(0, 240), 0.0);
+        let mut seen = std::collections::BTreeSet::new();
+        for tick in 0..240 {
+            let phase = presentation_phase(tick, 240);
+            assert!((0.0..std::f64::consts::TAU).contains(&phase));
+            assert_eq!(phase, presentation_phase(tick, 240), "pure function");
+            assert_eq!(phase, presentation_phase(tick + 240, 240), "wraps per cycle");
+            seen.insert(phase.to_bits());
+        }
+        assert_eq!(seen.len(), 240, "each tick of the cycle has its own phase");
+        assert_eq!(presentation_phase(5, 0), 0.0, "a zero cycle cannot divide");
+    }
+
+    /// The displacement adaptation stays inside Grengewald's gentle range:
+    /// the fixture strength passes through, anything else is clamped at the
+    /// edge rather than rescaled into different units.
+    #[test]
+    fn the_displacement_stays_in_grengewalds_metre_range() {
+        let mut snapshot = WeatherSnapshot::new(0, 1.0, 0.0, 0.0, 0.0, 10.0, 0.5)
+            .expect("valid fixture values");
+        for strength in [0.0, 0.05, 0.7, 1.0] {
+            snapshot.wind_strength = strength;
+            assert_eq!(wind_vector(&snapshot, 240)[2], strength);
+        }
+        snapshot.wind_strength = 2.5;
+        assert_eq!(wind_vector(&snapshot, 240)[2], 1.0, "clamped at 1 metre");
+        snapshot.wind_strength = -1.0;
+        assert_eq!(wind_vector(&snapshot, 240)[2], 0.0, "clamped at neutral");
+    }
+
+    /// The snapshot must never become renderer-specific: the weather struct
+    /// declares the planned fields and carries no presentation phase.
+    #[test]
+    fn the_snapshot_carries_no_presentation_phase() {
+        let core_source = include_str!("../../remich_core/src/weather.rs");
+        let start = core_source
+            .find("pub struct WeatherSnapshot")
+            .expect("the snapshot struct exists");
+        let rest = &core_source[start..];
+        let end = rest.find("\n}").expect("the struct body ends");
+        let body = &rest[..end];
+        for field in [
+            "tick:",
+            "wind_dir_x:",
+            "wind_dir_z:",
+            "wind_strength:",
+            "rain:",
+            "temperature:",
+            "light:",
+        ] {
+            assert!(body.contains(field), "the snapshot must declare '{field}'");
+        }
+        for forbidden in ["phase", "motion", "shader", "global"] {
+            assert!(
+                !body.contains(forbidden),
+                "the snapshot must not carry presentation state '{forbidden}'"
+            );
+        }
+    }
+
+    /// The live write goes through the engine's real runtime setter with the
+    /// pinned name, and the binding deliberately uses **no** global getter —
+    /// Grengewald documents getters as editor-only in the compatibility
+    /// backend, so the applied vector is read back from the recorded
+    /// argument instead.
+    #[test]
+    fn the_binding_uses_the_real_setter_and_no_getter() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains("global_shader_parameter_set("));
+        assert!(source.contains("global_shader_parameter_set(WIND_GLOBAL_NAME"));
+        let getter = ["global_shader_parameter", "_get"].join("");
+        assert!(
+            !source.contains(&getter),
+            "the binding must not call the unusable runtime getter"
+        );
+        // The mapping helper is a pure function of (tick, cycle): no delta,
+        // no wall clock — nothing but the integer tick inside it.
+        let start = source
+            .find("fn presentation_phase")
+            .expect("the presentation helper exists");
+        let end = source
+            .find("fn wind_vector")
+            .expect("the mapping helper follows it");
+        let section = &source[start..end];
+        assert!(!section.contains("delta"));
+        assert!(!section.contains("elapsed"));
+        assert!(!section.contains("Instant"));
     }
 
     /// The Godot layer converts and forwards: it never scores.

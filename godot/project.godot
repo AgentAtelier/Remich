@@ -20,6 +20,15 @@ config/features=PackedStringArray("4.7")
 Marker="*res://marker.gd"
 ScorerProbe="*res://scorer_probe.gd"
 WorldClock="*res://world_clock.gd"
+Weather="*res://weather.gd"
 DayProbe="*res://day_probe.gd"
 ClockProbe="*res://clock_probe.gd"
 BridgeProbe="*res://bridge_probe.gd"
+WeatherProbe="*res://weather_probe.gd"
+
+[shader_globals]
+
+grengewald_wind={
+"type": "vec4",
+"value": Vector4(1, 0, 0, 0)
+}
