@@ -1,6 +1,6 @@
 # Plan — Remich (the Rust bridge): the destination, and phase 1
 
-Status: current plan, owner direction 2026-09-30; **phase 2 opened 2026-10-01** (§4a; owner: the lanes run all in). Phase 1's lane steps 1–5 are merged (#6 last); Y-R, which closes phase 1 in Larochette, is the lead's. Remich is **lane 4** of the second round. How
+Status: current plan, owner direction 2026-09-30; **phase 3 opened 2026-10-01** (§4b; owner: a lane that finished its phase gets the next). Phase 2's steps 1–4 are merged (#12 last); issue #9 (the embedded catalogue) is phase 3's first step. Y-R is the lead's (Larochette #18). Remich is **lane 4** of the second round.
 lanes run is in Yolanda's
 [docs/orchestration/LANES.md](https://github.com/AgentAtelier/Yolanda/blob/main/docs/orchestration/LANES.md);
 this plan says where it differs. Background: Yolanda's
@@ -146,6 +146,50 @@ the clock, the weather snapshot and the save into Larochette; what Eisleck's wea
 needs actually do.
 
 **Done when:** steps 1–4 are merged with their acceptance.
+
+## 4b. Phase 3 — anvil's people and the world's threats, across the bridge (opened 2026-10-01)
+
+**Why.** Forgeborn is the game's vision (owner, 2026-09-30): people who cope and find joy, and a world
+that is the main threat. anvil already holds first passes of both: a layered soul with emotions
+that spread, skills learned by doing and watching, catastrophes as signals that propagate. Phase 1
+and 2 proved the bridge, the clock, one weather snapshot and the save. Phase 3 brings those anvil
+systems across **unchanged** (donor imports with provenance, as in phase 1), callable from Godot,
+proven in Remich's own test project. What they *mean* for Ada (Munshausen) and for the weather
+(Eisleck) stays with the owner and the lead.
+
+**What the owner sees at the end, honestly.** Nothing new in Larochette until the lead wires it. In
+Remich's test project: three stand-in inhabitants whose moods move with what happens to them and
+spread between them; one who gets better at a task by doing it and another by watching; a storm that
+arrives as an anvil catastrophe signal, raises the wind in the one weather snapshot (the same global
+Grengewald's trees read), and that every inhabitant's mood feels. All as traces and numbers.
+
+**Steps (the lane), in order:**
+
+1. **The embedded catalogue (issue #9).** As ruled there: the action catalogue compiled into the
+   library, the donor adaptation recorded, the ratchets updated. *Acceptance:* the library scores
+   correctly after its build checkout is moved.
+2. **The soul across the bridge.** anvil's layered soul (`soul/`, `soul.rs`: traits from a seed, the
+   four emotional axes) callable from Godot: create from a seed, apply an event (a need met or unmet,
+   a catastrophe felt), read the axes; emotions spread between inhabitants close to each other
+   (anvil's contagion, as it is). Deterministic. *Acceptance:* the same seed and events give a
+   byte-identical mood trace for three stand-ins; a sabotage test that disables contagion changes it.
+3. **Skills by doing and by watching.** anvil's `skill/` (practice, fluency, profile, perceptibility):
+   practising raises fluency; an inhabitant who can perceive another practising learns more slowly by
+   watching. *Acceptance:* a trace where the doer's fluency rises faster than the watcher's, and a
+   watcher who cannot perceive learns nothing; deterministic.
+4. **Catastrophes as signals.** anvil's `catastrophe/` (event, signal, propagation) callable: a seeded
+   event (a storm) propagates its signal; behind a switch it drives the weather snapshot (phase 2
+   step 2) instead of the stand-in schedule, and inhabitants feel it through step 2. "Predictable in
+   kind, unpredictable in timing" (Forgeborn) is anvil's, unchanged. *Acceptance:* with the switch on,
+   the wind global follows the storm; off, the stand-in schedule as before; deterministic by seed.
+5. **What `system/npc` needs.** The donor's `system/npc` module (its `mod.rs` preserved as
+   `kimi_npc_mod.rs`, §3) is taken only if steps 2–4 need it, repaired with every change listed.
+   Otherwise recorded as not taken.
+
+**Lead steps (not the lane):** wiring soul, skills and catastrophes into Larochette (Munshausen's
+Ada, Eisleck's weather); what they should mean in the game, with the owner.
+
+**Done when:** steps 1–4 (and 5 if needed) are merged with their acceptance and rebuild times posted.
 
 ## 5. What the monitor reports to the owner
 
