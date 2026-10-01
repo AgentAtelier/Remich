@@ -1,6 +1,6 @@
 # Plan — Remich (the Rust bridge): the destination, and phase 1
 
-Status: current plan, owner direction 2026-09-30. Remich is **lane 4** of the second round. How
+Status: current plan, owner direction 2026-09-30; **phase 2 opened 2026-10-01** (§4a; owner: the lanes run all in). Phase 1's lane steps 1–5 are merged (#6 last); Y-R, which closes phase 1 in Larochette, is the lead's. Remich is **lane 4** of the second round. How
 lanes run is in Yolanda's
 [docs/orchestration/LANES.md](https://github.com/AgentAtelier/Yolanda/blob/main/docs/orchestration/LANES.md);
 this plan says where it differs. Background: Yolanda's
@@ -101,6 +101,51 @@ scorer behind that switch. The owner watches Ada's day.
 rebuild times are posted. Those times decide the next phase: if a change reaches Godot in seconds,
 Munshausen and Eisleck grow on anvil's core in the game; if not, the fallback in the Rust review
 (cores as offline tools exchanging data with the game) is reconsidered with the owner.
+
+## 4a. Phase 2 — the game's foundations, across the bridge (opened 2026-10-01)
+
+**Why.** Phase 1's measurement settled §4's question: a one-line change reaches the Godot day in
+**0.73 s** (#6), so the game's cores can live in Rust inside the game. Three things every later core
+needs, and which no module owns, come first: one clock, one weather snapshot and the game's save.
+They are the game's side of "tool and game stay separate" (owner, 2026-09-30): nothing here enters
+Yolanda's history. What the weather *does* (Eisleck) and what Ada *wants* (Munshausen) stay with the
+owner and the lead; Remich builds the channels they will run through.
+
+**What the owner sees at the end, honestly.** Nothing new in Larochette until the lead wires it.
+In Remich's test project: a day that runs on one clock and can be paused and sped up; a stand-in
+weather that turns windy and the test project's stand-in trees read the same wind value Grengewald's
+trees read; a save taken at noon, loaded again, and the day continues identically; the same save
+loaded into a changed world keeps what fits and lists what it dropped. Plus numbers: how many
+inhabitants the scorer handles per tick.
+
+**Steps (the lane), in order:**
+
+1. **One clock.** A Rust world clock: integer ticks (never accumulated floats, the scouts' warning),
+   a fixed tick length, pause and speed, one Godot node every core reads. The scorer of phase 1 runs on
+   it. *Acceptance:* the same seed and inputs give a byte-identical trace at speed 1 and at speed 4; a
+   sabotage test that advances time by accumulated float seconds fails it.
+2. **One weather snapshot.** A Rust-held snapshot (wind direction and strength, rain, temperature,
+   light), written by exactly one driver and read by everything else; the driver now is a stand-in
+   schedule (calm morning, windy afternoon), to be replaced by Eisleck. The binding writes the wind as
+   the shader global Grengewald's trees already read (its `docs/GODOT.md`, read-only; ruling 1).
+   *Acceptance:* a second writer is refused; the test project's wind global follows the snapshot each
+   tick; the snapshot is deterministic for a seed.
+3. **The game's save.** anvil's shape: a save holds the cores' state, the clock and the weather
+   snapshot, plus a copy of the **tool's identity** (the Yolanda world revision the game was built
+   from, passed in as a plain string). Loading continues identically. Loading against a different
+   identity **adapts** (owner, 2026-09-30): it keeps what still fits, drops what no longer does, and
+   says what it dropped; it never refuses to load and never writes to the tool's files. *Acceptance:*
+   save at noon, load, the rest of the day's trace is byte-identical; load with a changed identity in
+   which one place no longer exists: the inhabitant's state that pointed there is dropped and named.
+4. **Many inhabitants, measured.** The scorer for 1, 10, 100 and 1,000 stand-in inhabitants per tick,
+   time per tick reported (groundwork for Forgeborn's Social LOD; no optimisation back and forth).
+   *Acceptance:* the numbers posted with the command that reproduces them.
+
+**Lead steps (not the lane):** Y-R (Ada in Larochette uses the scorer, which closes phase 1); wiring
+the clock, the weather snapshot and the save into Larochette; what Eisleck's weather and Munshausen's
+needs actually do.
+
+**Done when:** steps 1–4 are merged with their acceptance.
 
 ## 5. What the monitor reports to the owner
 
