@@ -25,6 +25,7 @@ DayProbe="*res://day_probe.gd"
 ClockProbe="*res://clock_probe.gd"
 BridgeProbe="*res://bridge_probe.gd"
 WeatherProbe="*res://weather_probe.gd"
+SaveProbe="*res://save_probe.gd"
 
 [shader_globals]
 

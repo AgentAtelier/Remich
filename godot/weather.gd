@@ -69,6 +69,17 @@ func drive(tick: int) -> Dictionary:
 	return _delegate("drive", [tick])
 
 
+## The save-restore path (phase 2, step 3): re-publishes a loaded save's
+## verified snapshot **through the stand-in driver that owns the channel**,
+## with the seed and cycle checked against this run's fixture. Not a weather
+## setter: it takes the save's structure, refuses anything else, and leaves
+## the one-writer rule exactly as it was — a second writer still cannot
+## publish. The presentation phase is not restored; it is derived again from
+## the restored integer tick when the wind global is next applied.
+func restore_save_state(state: Dictionary) -> Dictionary:
+	return _delegate("restore_save_state", [state])
+
+
 ## The latest snapshot, read straight from the Rust channel. `ok=false` with
 ## code `no-snapshot` before the first publish.
 func snapshot() -> Dictionary:

@@ -92,6 +92,21 @@ func reset(new_tick: int) -> Dictionary:
 	return _delegate("reset", [new_tick])
 
 
+## The clock's whole state as plain values — tick, fixed tick length, speed,
+## paused — for the game's save (phase 2, step 3). A read, like every other
+## method here: this script holds no copy of it.
+func capture_state() -> Dictionary:
+	return _delegate("capture_state", [])
+
+
+## Replaces the ONE native clock's whole state from a validated save (phase
+## 2, step 3). The native object mutates in place — this autoload's instance
+## id never changes, no second clock appears, and Rust refuses a state that
+## construction would have refused. The save path's only clock entry point.
+func restore_state(state: Dictionary) -> Dictionary:
+	return _delegate("restore_state", [state])
+
+
 ## One driver pulse: every tick made available by this pulse, in order.
 ## Empty while paused. Never a float input.
 func pulse() -> Array:

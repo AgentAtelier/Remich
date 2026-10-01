@@ -41,8 +41,22 @@
 //! Remich's test project uses `240` as *its test fixture's* cycle length —
 //! a test-project configuration, not a decision about any game's simulation
 //! rate.
+//!
+//! ## Save state (Phase 2, Step 3)
+//!
+//! The whole clock is four integer/bool fields, so the game's save holds all
+//! of them: [`WorldClock::capture_state`] reads them and
+//! [`WorldClock::restore_state`] replaces them wholesale from a validated
+//! save. Restore is the one sanctioned full-state replacement of a live
+//! clock (construction fixes the tick length for ordinary life; a loaded save
+//! is not ordinary life), and it validates exactly what construction
+//! validates — a zero tick length or a zero speed is refused. The clock
+//! still exists as one object: restore mutates the existing clock, it never
+//! creates a second one.
 
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
 
 /// The error type of this module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +158,26 @@ pub struct WorldClock {
     paused: bool,
 }
 
+/// The clock's complete authoritative state, as the game's save holds it
+/// (Phase 2, Step 3).
+///
+/// Four fields, all integer or bool — the save never stores wall-clock time,
+/// accumulated seconds or an engine delta, because this clock has none to
+/// store. `tick` is the same *next tick* position [`WorldClock::pulse`]
+/// advances from; a save taken when the clock points at tick `N` continues
+/// with tick `N`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClockState {
+    /// The authoritative position: the next tick a pulse will make available.
+    pub tick: u64,
+    /// The fixed tick length in whole nanoseconds.
+    pub tick_length_ns: u64,
+    /// The integer speed multiplier (≥ 1).
+    pub speed: u32,
+    /// Whether the clock is paused.
+    pub paused: bool,
+}
+
 impl WorldClock {
     /// A clock at tick 0 with the given fixed tick length.
     pub fn new(tick_length_ns: u64) -> Result<Self, ClockError> {
@@ -210,6 +244,38 @@ impl WorldClock {
     /// reset). Does not touch pause state, speed or the tick length.
     pub fn reset(&mut self, tick: u64) {
         self.tick = tick;
+    }
+
+    /// The clock's whole state, read for the game's save (Phase 2, Step 3).
+    /// A plain copy of the four authoritative fields — no wall-clock time is
+    /// read, because none exists here to read.
+    pub const fn capture_state(&self) -> ClockState {
+        ClockState {
+            tick: self.tick,
+            tick_length_ns: self.tick_length_ns,
+            speed: self.speed,
+            paused: self.paused,
+        }
+    }
+
+    /// Replaces this clock's whole state from a validated save (Phase 2,
+    /// Step 3). The **same** clock object continues — restore mutates this
+    /// clock in place and never produces a second one — and the saved state
+    /// must be as sound as construction requires: a zero tick length or a
+    /// zero speed is refused, and nothing else is second-guessed (a changed
+    /// tool identity is adaptation's business, not the clock's).
+    pub fn restore_state(&mut self, state: ClockState) -> Result<(), ClockError> {
+        if state.tick_length_ns == 0 {
+            return Err(ClockError::ZeroTickLength);
+        }
+        if state.speed == 0 {
+            return Err(ClockError::ZeroSpeed);
+        }
+        self.tick = state.tick;
+        self.tick_length_ns = state.tick_length_ns;
+        self.speed = state.speed;
+        self.paused = state.paused;
+        Ok(())
     }
 
     /// One driver pulse: makes `speed` consecutive ticks available, in order,
@@ -606,5 +672,134 @@ mod tests {
         assert_eq!(batch.last(), Some(11));
         assert_eq!(TickBatch::empty().last(), None);
         assert!(TickBatch::empty().ticks().next().is_none());
+    }
+
+    /// Capturing reads the four authoritative fields and nothing else: the
+    /// saved clock state is exactly tick, tick length, speed and pause —
+    /// integer/bool state, no wall clock, no accumulated seconds.
+    #[test]
+    fn clock_state_captures_every_authoritative_field() {
+        let mut clock = clock_at_speed(4);
+        clock.reset(119);
+        clock.pause();
+        let state = clock.capture_state();
+        assert_eq!(state.tick, 119);
+        assert_eq!(state.tick_length_ns, TEST_TICK_LENGTH_NS);
+        assert_eq!(state.speed, 4);
+        assert!(state.paused);
+        // The other direction: a fresh running clock at speed 1.
+        let fresh = WorldClock::new(TEST_TICK_LENGTH_NS).expect("valid tick length");
+        let state = fresh.capture_state();
+        assert_eq!(
+            state,
+            ClockState {
+                tick: 0,
+                tick_length_ns: TEST_TICK_LENGTH_NS,
+                speed: 1,
+                paused: false,
+            }
+        );
+    }
+
+    /// Restore puts a captured state back **into the same clock**, and the
+    /// clock continues from exactly the saved next tick: state at 119 paused
+    /// at speed 4 resumes emitting 119, 120, ... and nothing else changes.
+    #[test]
+    fn restore_replaces_the_states_exactly_and_continues_from_the_saved_tick() {
+        let mut donor = clock_at_speed(4);
+        donor.reset(119);
+        donor.pause();
+        let state = donor.capture_state();
+
+        let mut clock = WorldClock::new(TEST_TICK_LENGTH_NS).expect("valid tick length");
+        clock.restore_state(state).expect("valid saved state");
+        assert_eq!(clock.capture_state(), state);
+        assert_eq!(clock.tick(), 119, "the saved next tick is restored");
+        assert!(clock.is_paused(), "pause state is restored");
+        clock.resume();
+        assert_eq!(
+            emitted(&mut clock, 1),
+            vec![119, 120, 121, 122],
+            "the restored clock pulses from the saved tick at the saved speed"
+        );
+    }
+
+    /// Restore is a state replacement on the existing clock: after it, every
+    /// capture of the clock equals the state that went in — round-trip
+    /// capture -> restore -> capture is the identity.
+    #[test]
+    fn capture_restore_capture_is_the_identity() {
+        let mut clock = WorldClock::starting_at(TEST_TICK_LENGTH_NS, 120)
+            .expect("valid tick length");
+        clock.set_speed(3).expect("valid speed");
+        clock.pause();
+        let state = clock.capture_state();
+        clock.restore_state(state).expect("valid saved state");
+        assert_eq!(clock.capture_state(), state);
+        // And a save taken after ordinary running round-trips too.
+        clock.resume();
+        for _ in 0..5 {
+            let _ = clock.pulse();
+        }
+        let state = clock.capture_state();
+        clock.restore_state(state).expect("valid saved state");
+        assert_eq!(clock.capture_state(), state);
+        assert_eq!(clock.tick(), 135, "120 + 5 ticks at speed 3");
+    }
+
+    /// A saved state that construction would refuse is refused here too: a
+    /// zero tick length or a zero speed never enters the live clock, and the
+    /// clock's previous state survives the refusal untouched.
+    #[test]
+    fn restore_refuses_a_zero_tick_length_and_a_zero_speed() {
+        let mut clock = WorldClock::new(TEST_TICK_LENGTH_NS).expect("valid tick length");
+        clock.reset(42);
+        let before = clock.capture_state();
+
+        let zero_length = ClockState {
+            tick_length_ns: 0,
+            ..before
+        };
+        assert_eq!(
+            clock.restore_state(zero_length),
+            Err(ClockError::ZeroTickLength)
+        );
+
+        let zero_speed = ClockState {
+            speed: 0,
+            ..before
+        };
+        assert_eq!(clock.restore_state(zero_speed), Err(ClockError::ZeroSpeed));
+
+        assert_eq!(
+            clock.capture_state(),
+            before,
+            "a refused restore changes nothing"
+        );
+    }
+
+    /// The saved clock state carries only the four integer/bool fields —
+    /// read from this file's own source, so a float or an accumulated
+    /// seconds field cannot quietly join the save.
+    #[test]
+    fn clock_state_declares_only_integer_authoritative_fields() {
+        let source = include_str!("clock.rs");
+        let start = source
+            .find("pub struct ClockState")
+            .expect("the save's clock state exists");
+        let rest = &source[start..];
+        let end = rest.find("\n}").expect("the struct body ends");
+        let body = &rest[..end];
+        for field in ["tick:", "tick_length_ns:", "speed:", "paused:"] {
+            assert!(body.contains(field), "ClockState must declare '{field}'");
+        }
+        // "_seconds" (accumulated-seconds state), not "seconds": the tick
+        // length legitimately ends in "nanoseconds".
+        for banned in ["f32", "f64", "_seconds", "elapsed", "wall"] {
+            assert!(
+                !body.contains(banned),
+                "ClockState must not carry '{banned}' state"
+            );
+        }
     }
 }
