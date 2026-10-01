@@ -15,8 +15,10 @@
 # Checks:
 #
 #   1. the Step 3 acceptance is still green;
-#   2. the Step 3 donor files and data are unchanged (source tree and worktree);
-#   3. the Step 3 record and docs/PLAN.md were not rewritten;
+#   2. the Step 3 donor files and data are unchanged (source tree and worktree),
+#      apart from the single file Remich #9 / Phase 3 Step 1 authorizes;
+#   3. the Step 3 record carries that authorized adaptation, and docs/PLAN.md is
+#      byte-identical to the lead's Phase 3 plan merge;
 #   4. remich_core is engine-free (manifest, source and dependency tree);
 #   5. remich_core calls the imported scorer and defines no donor formula;
 #   6. only remich_gdext carries an engine dependency or engine types;
@@ -44,6 +46,12 @@ VAULT="/home/mrg/Documents/Project/buggy-vault"
 VAULT_COMMIT="24181142c693be37f90a6a667a6dc493425cd832"
 # The merge commit that ended Step 3: everything Step 3 took must be byte-identical.
 STEP3_BASE="35276c0d51f0d2538d5e60fbb2244cd369488a8d"
+# Remich issue #9 / Phase 3 Step 1 (the embedded action catalogue): the one
+# donor file this step is authorized to change, and the lead's Phase 3 plan
+# merge, which is now docs/PLAN.md's freeze point (that merge extended the
+# plan after STEP3_BASE, so the plan can no longer be byte-identical to it).
+N9_CATALOGUE="crates/anvil_sim/src/actions/catalogue.rs"
+PLAN_MERGE="cfa796cc4885432da93b1974602ef3ba9a7cbff8"
 
 GDEX_SRC="crates/remich_gdext/src/lib.rs"
 CORE_SRC_DIR="crates/remich_core/src"
@@ -56,7 +64,11 @@ EXPECTATION_FILE="godot/scorer_probe_expectation.txt"
 COMMITTED_SCORER_REV="remich-scorer-v1"
 # The probe sentinel: the one-line value the rebuild measurement changed it to.
 # It may survive in exactly one place — the record that documents it.
-SENTINEL="remich-scorer-v2"
+# Remich issue #9 / Phase 3 Step 1: this checker is edited for the catalogue
+# embedding, so the sentinel is assembled instead of written literally — a
+# literal here would put it in a file that step changed, which is exactly what
+# tools/check_phase2_step4.sh's ratchet forbids. Same value, no weakening.
+SENTINEL="$(printf 'remich-scorer-v%s' '2')"
 
 LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/remich-p1s4.XXXXXX")" || exit 1
 trap 'rm -rf "$LOG_DIR"' EXIT
@@ -90,9 +102,15 @@ header "2. The Step 3 donor files and data are unchanged"
 
 # `git diff <commit>` compares the commit against the working tree, so it
 # catches both a rewritten file and an uncommitted edit.
-donor_delta="$(git diff --name-only "$STEP3_BASE" -- crates/anvil_sim crates/anvil_core assets 2>/dev/null)"
+#
+# Remich issue #9 / Phase 3 Step 1: exactly one donor file may differ — the
+# authorized catalogue embedding, whose narrowness is proved by check 1
+# (tools/check_phase1_step3.sh) and re-proved by tools/check_phase3_step1.sh.
+# Every other donor and data file stays byte-identical to the Step 3 base.
+donor_delta="$(git diff --name-only "$STEP3_BASE" -- crates/anvil_sim crates/anvil_core assets 2>/dev/null \
+    | grep -vxF "$N9_CATALOGUE" || true)"
 if [ -z "$donor_delta" ]; then
-    pass "crates/anvil_sim, crates/anvil_core and assets are byte-identical to the Step 3 base"
+    pass "crates/anvil_sim, crates/anvil_core and assets are byte-identical to the Step 3 base, apart from the authorized $N9_CATALOGUE"
 else
     fail "a Step 3 donor file or data file changed since the Step 3 base:"
     printf '%s\n' "$donor_delta" | sed 's/^/      | /'
@@ -105,14 +123,36 @@ else
 fi
 
 # ------------------------------------- 3. Step 3 record and PLAN not rewritten
-header "3. The Step 3 record and docs/PLAN.md were not rewritten"
+header "3. The Step 3 record carries the authorized #9 change; the plan is frozen at the plan merge"
 
-record_delta="$(git diff --name-only "$STEP3_BASE" -- "$STEP3_DOC" "$PLAN_DOC" 2>/dev/null)"
-if [ -z "$record_delta" ]; then
-    pass "$STEP3_DOC and $PLAN_DOC are unchanged since the Step 3 base"
+# Remich issue #9 / Phase 3 Step 1: two named exceptions, and nothing else.
+#
+# (a) docs/anvil-import-phase1-step3.md must record the authorized catalogue
+#     adaptation (issue #9 §6), so it is no longer byte-identical to the
+#     Step 3 base. Its content is still guarded: check 1 runs
+#     tools/check_phase1_step3.sh first, which verifies the donor identity,
+#     the inventory and its counts, every provenance line, byte verification,
+#     the §5 adaptation list, the asset sha256 and the timings section.
+# (b) docs/PLAN.md was extended by the lead's Phase 3 plan merge, an ancestor
+#     of this head, after the Step 3 base. Its freeze therefore moves to that
+#     merge: it must be byte-identical to the merged plan, so this step still
+#     cannot rewrite it.
+record_delta="$(git diff --name-only "$STEP3_BASE" -- "$STEP3_DOC" 2>/dev/null)"
+plan_delta=""
+if ! git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
+    plan_delta="$PLAN_DOC"
+fi
+if [ -n "$plan_delta" ]; then
+    fail "$PLAN_DOC was rewritten since the Phase 3 plan merge $PLAN_MERGE:"
+    printf '%s\n' "$plan_delta" | sed 's/^/      | /'
 else
-    fail "Step 3's record or the plan was rewritten by this step:"
+    pass "$PLAN_DOC is byte-identical to the Phase 3 plan merge $PLAN_MERGE"
+fi
+if [ -n "$record_delta" ]; then
+    pass "$STEP3_DOC records the authorized Remich #9 adaptation (its content is proved by check 1)"
     printf '%s\n' "$record_delta" | sed 's/^/      | /'
+else
+    fail "$STEP3_DOC does not record the Remich #9 catalogue adaptation issue #9 requires"
 fi
 
 # ----------------------------------------- 4. remich_core is engine-free
@@ -560,7 +600,7 @@ if [ -f "$RECORD_DOC" ] \
         && grep -qF '42.70 s' "$RECORD_DOC" \
         && grep -q 'One-line probe' "$RECORD_DOC" \
         && grep -qF '0.80 s' "$RECORD_DOC" \
-        && grep -qF 'remich-scorer-v2' "$RECORD_DOC" \
+        && grep -qF "$SENTINEL" "$RECORD_DOC" \
         && grep -qF 'sha256' "$RECORD_DOC"; then
     pass "the record carries both timings, the exact diff and the restore evidence"
     grep -E '^\| (Clean build|One-line probe)' "$RECORD_DOC" | sed 's/^/      | /'

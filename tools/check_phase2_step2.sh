@@ -13,8 +13,11 @@
 # Requirements, as checks (numbered as the step prompt numbered them):
 #
 #   1. the Step 1 merge is an ancestor of this head;
-#   2. tools/check_phase2_step1.sh remains green and unchanged;
-#   3. donor code/data and provenance remain untouched;
+#   2. tools/check_phase2_step1.sh remains green, differing only by its named
+#      Remich #9 / Phase 3 Step 1 edit (with docs/PLAN.md frozen at the lead's
+#      Phase 3 plan merge);
+#   3. donor code/data and provenance remain untouched, bar the one file
+#      Remich #9 authorizes and the record documenting it;
 #   4. the weather core is engine-free;
 #   5. one Rust-held snapshot contains the planned fields;
 #   6. exactly one writer is enforced behaviourally;
@@ -75,6 +78,15 @@ TRACE_VALIDATOR="tools/check_weather_trace.py"
 RUN_WEATHER="tools/run_weather.sh"
 RECORD_DOC="docs/remich-weather-phase2-step2.md"
 PLAN_DOC="docs/PLAN.md"
+# Remich issue #9 / Phase 3 Step 1 (the embedded action catalogue): the one
+# donor file this step is authorized to change, the provenance record that
+# documents it, the checkers whose ratchets it legitimately moved, and the
+# lead's Phase 3 plan merge, at which docs/PLAN.md is now frozen (that merge
+# extended the plan after STEP1_MERGE, so the plan can no longer match it).
+N9_CATALOGUE="crates/anvil_sim/src/actions/catalogue.rs"
+N9_PROVENANCE="docs/anvil-import-phase1-step3.md"
+N9_CHECKERS="tools/check_phase1_step3.sh tools/check_phase1_step4.sh tools/check_phase1_step5.sh tools/check_phase2_step1.sh"
+PLAN_MERGE="cfa796cc4885432da93b1974602ef3ba9a7cbff8"
 
 COMMITTED_WEATHER_REV="remich-weather-v1"
 # Standing ruling 1's repository, named as data (never as a literal path, so
@@ -156,7 +168,7 @@ fi
 note "HEAD is $(git rev-parse HEAD)"
 
 # ------------------------------- 2. Step 1 acceptance green and unchanged
-header "2. Step 1 acceptance remains green and unchanged"
+header "2. Step 1 acceptance remains green (frozen files differ only by the named Remich #9 edits)"
 
 # The deep re-proof: Step 1's own 23 checks (clock integer-authority, shared
 # node, speed/pause, byte-identical traces, sabotage-freedom, build/tests,
@@ -173,28 +185,55 @@ fi
 
 # "unchanged": neither Step 1's checker, nor any Phase 1 checker, nor the
 # plan may differ since the Step 1 merge.
+#
+# Remich issue #9 / Phase 3 Step 1: four of the frozen checkers changed,
+# because the authorized catalogue adaptation moved ratchets inside them
+# (inventory counts, the donor byte rule, the frozen source-test count, the
+# donor/record/plan freezes). Each edit carries a comment naming this issue,
+# and tools/check_phase3_step1.sh verifies that they carry nothing else.
+# docs/PLAN.md was extended by the lead's Phase 3 plan merge, so it is frozen
+# byte-for-byte at that merge instead of at the Step 1 merge — which still
+# forbids this step from rewriting it. Every other frozen file must match
+# $STEP1_MERGE exactly.
 step1_delta="$(git diff --name-only "$STEP1_MERGE" -- \
     "$STEP1_CHECKER" tools/check_phase1_step1.sh tools/check_phase1_step2.sh \
     tools/check_phase1_step3.sh tools/check_phase1_step4.sh \
-    tools/check_phase1_step5.sh "$PLAN_DOC" 2>/dev/null)"
-if [ -z "$step1_delta" ]; then
-    pass "Step 1's checker, every Phase 1 checker and docs/PLAN.md are unchanged since $STEP1_MERGE"
+    tools/check_phase1_step5.sh 2>/dev/null \
+    | grep -vxF -e "$STEP1_CHECKER" -e tools/check_phase1_step3.sh \
+        -e tools/check_phase1_step4.sh -e tools/check_phase1_step5.sh || true)"
+plan_delta=""
+if ! git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
+    plan_delta="$PLAN_DOC"
+fi
+combined="$(printf '%s\n%s\n' "$step1_delta" "$plan_delta" | sed '/^$/d')"
+if [ -z "$combined" ]; then
+    pass "the frozen checkers differ only by their named Remich #9 edits, and docs/PLAN.md matches the plan merge"
 else
-    fail "a frozen checker or the plan changed since the Step 1 merge:"
-    printf '%s\n' "$step1_delta" | sed 's/^/      | /'
+    fail "a frozen checker or the plan changed beyond the Remich #9 authorization:"
+    printf '%s\n' "$combined" | sed 's/^/      | /'
 fi
 
 # --------------------------------- 3. donor code/data and provenance untouched
-header "3. Donor code/data and provenance remain untouched"
+header "3. Donor code/data and provenance remain untouched, bar the authorized Remich #9 entry"
 
+# Remich issue #9 / Phase 3 Step 1: two named exceptions — the authorized
+# catalogue embedding, and the provenance record that documents it (its
+# content is guarded by the Step 3 sub-check inside Step 1's checker).
+# docs/PLAN.md is frozen byte-for-byte at the lead's Phase 3 plan merge.
 donor_delta="$(git diff --name-only "$STEP1_MERGE" -- \
     crates/anvil_sim crates/anvil_core assets docs/anvil-import-phase1-step3.md \
-    "$PLAN_DOC" 2>/dev/null)"
-if [ -z "$donor_delta" ]; then
-    pass "donor crates, data, the provenance record and docs/PLAN.md are unchanged since the Step 1 merge"
+    2>/dev/null \
+    | grep -vxF -e "$N9_CATALOGUE" -e "$N9_PROVENANCE" || true)"
+plan_delta=""
+if ! git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
+    plan_delta="$PLAN_DOC"
+fi
+combined="$(printf '%s\n%s\n' "$donor_delta" "$plan_delta" | sed '/^$/d')"
+if [ -z "$combined" ]; then
+    pass "donor crates and data are unchanged but for the authorized $N9_CATALOGUE, the provenance record documents it, and docs/PLAN.md matches the plan merge"
 else
-    fail "donor code/data, provenance or the plan changed since $STEP1_MERGE:"
-    printf '%s\n' "$donor_delta" | sed 's/^/      | /'
+    fail "donor code/data, provenance or the plan changed beyond the Remich #9 authorization:"
+    printf '%s\n' "$combined" | sed 's/^/      | /'
 fi
 
 if grep -qE "(^|[[:space:]:])bash tools/check_phase1_step3\.sh exits 0" "$LOG_STEP1" 2>/dev/null; then

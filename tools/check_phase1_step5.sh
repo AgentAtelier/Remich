@@ -15,9 +15,11 @@
 # Requirements, as checks:
 #
 #   1. `bash tools/check_phase1_step4.sh` remains green;
-#   2. Step 3 donor code and data are unchanged (and so are the Step 3 record
-#      and docs/PLAN.md);
-#   3. Step 4 scorer/decay behaviour is unchanged — no Rust changed at all;
+#   2. Step 3 donor code and data are unchanged bar the one file Remich #9 /
+#      Phase 3 Step 1 authorizes, the Step 3 record that documents it, and
+#      docs/PLAN.md frozen at the lead's Phase 3 plan merge;
+#   3. Step 4 scorer/decay behaviour is unchanged — no Rust changed beyond
+#      that same authorized catalogue embedding;
 #   4. the day harness exists in Remich's own Godot project;
 #   5. it is inactive during ordinary earlier-step runs unless activated;
 #   6. pinned Godot 4.7.2 runs the day through the real `RemichScorer`;
@@ -64,6 +66,12 @@ STEP3_DOC="docs/anvil-import-phase1-step3.md"
 PLAN_DOC="docs/PLAN.md"
 TRACE_ENV="REMICH_DAY_TRACE_PATH"
 COMMITTED_SCORER_REV="remich-scorer-v1"
+# Remich issue #9 / Phase 3 Step 1 (the embedded action catalogue): the one
+# donor file this step is authorized to change, and the lead's Phase 3 plan
+# merge, at which docs/PLAN.md is now frozen (that merge extended the plan
+# after STEP4_BASE, so the plan can no longer be byte-identical to it).
+N9_CATALOGUE="crates/anvil_sim/src/actions/catalogue.rs"
+PLAN_MERGE="cfa796cc4885432da93b1974602ef3ba9a7cbff8"
 
 LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/remich-p1s5.XXXXXX")" || exit 1
 trap 'rm -rf "$LOG_DIR"' EXIT
@@ -98,17 +106,31 @@ else
 fi
 
 # ------------------------------------ 2. Step 3 donor code and data unchanged
-header "2. Step 3 donor code, data and record are unchanged"
+header "2. Step 3 donor code, data and record are unchanged (bar the Remich #9 entry)"
 
 # `git diff <commit>` compares that commit against the working tree, so it
 # catches a rewritten file and an uncommitted edit alike.
+#
+# Remich issue #9 / Phase 3 Step 1: two named exceptions, and nothing else —
+# the authorized catalogue embedding, and the provenance record that issue #9
+# requires to document it (its content is guarded by check 1, which runs
+# tools/check_phase1_step3.sh). docs/PLAN.md is no longer frozen at
+# STEP4_BASE either, because the lead's Phase 3 plan merge extended it after
+# that base; it is frozen byte-for-byte at that merge instead, which still
+# forbids this step from rewriting it.
 donor_delta="$(git diff --name-only "$STEP4_BASE" -- \
-    crates/anvil_sim crates/anvil_core assets "$STEP3_DOC" "$PLAN_DOC" 2>/dev/null)"
-if [ -z "$donor_delta" ]; then
-    pass "crates/anvil_sim, crates/anvil_core, assets, the Step 3 record and the plan are unchanged"
+    crates/anvil_sim crates/anvil_core assets "$STEP3_DOC" 2>/dev/null \
+    | grep -vxF "$N9_CATALOGUE" | grep -vxF "$STEP3_DOC" || true)"
+plan_delta=""
+if ! git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
+    plan_delta="$PLAN_DOC"
+fi
+combined="$(printf '%s\n%s\n' "$donor_delta" "$plan_delta" | sed '/^$/d')"
+if [ -z "$combined" ]; then
+    pass "crates/anvil_sim, crates/anvil_core and assets are unchanged but for the authorized $N9_CATALOGUE, and the plan matches the Phase 3 plan merge"
 else
-    fail "a Step 3 file, the Step 3 record or the plan changed since the Step 4 base:"
-    printf '%s\n' "$donor_delta" | sed 's/^/      | /'
+    fail "a Step 3 file, the Step 3 record or the plan changed beyond the Remich #9 authorization:"
+    printf '%s\n' "$combined" | sed 's/^/      | /'
 fi
 
 if grep -qF "buggy-vault@${VAULT_COMMIT:0:8}" "$STEP3_DOC" 2>/dev/null; then
@@ -118,13 +140,19 @@ else
 fi
 
 # ------------------------------------- 3. Step 4 scorer/decay behaviour intact
-header "3. Step 4's scorer and decay behaviour are unchanged (no Rust changed)"
+header "3. Step 4's scorer and decay behaviour are unchanged (only the authorized catalogue embedding differs)"
 
-core_delta="$(git diff --name-only "$STEP4_BASE" -- crates Cargo.toml Cargo.lock rust-toolchain.toml 2>/dev/null)"
+# Remich issue #9 / Phase 3 Step 1: the authorized catalogue embedding is the
+# only Rust file this ratchet allows to differ. It changes how the catalogue
+# is delivered to the scorer, never the scorer: check 1's sub-check and the
+# day proofs below (identical trace SHA-256 across two runs) still pin the
+# behaviour.
+core_delta="$(git diff --name-only "$STEP4_BASE" -- crates Cargo.toml Cargo.lock rust-toolchain.toml 2>/dev/null \
+    | grep -vxF "$N9_CATALOGUE" || true)"
 if [ -z "$core_delta" ]; then
-    pass "every Rust source, manifest and lockfile is byte-identical to the Step 4 base"
+    pass "every other Rust source, manifest and lockfile is byte-identical to the Step 4 base"
 else
-    fail "a Rust file changed since the Step 4 base — Step 5 needs no Rust change:"
+    fail "a Rust file changed since the Step 4 base beyond the authorized $N9_CATALOGUE:"
     printf '%s\n' "$core_delta" | sed 's/^/      | /'
 fi
 
