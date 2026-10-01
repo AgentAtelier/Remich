@@ -221,8 +221,8 @@ Two runs with the same seed produce byte-identical traces:
 
 | run | SHA-256 |
 |---|---|
-| run 1 | `TBD-RUN1` |
-| run 2 | `TBD-RUN2` |
+| run 1 | `3686ae5d1abe7843d0a503a78b92ed2465381b359b4580369457648b86cd28b6` |
+| run 2 | `3686ae5d1abe7843d0a503a78b92ed2465381b359b4580369457648b86cd28b6` |
 
 Shape assertions (ranges, no float table): morning strength `<= 0.1`,
 afternoon strength `>= 0.5`, unit direction constant all day, every record's
@@ -245,12 +245,12 @@ All executable work (channel, tests, binding, nodes, shader, probes,
 staging, scripts, acceptance) was committed first; only documentation
 changed afterwards.
 
-**Measured commit:** `TBD-MEASURED`
+**Measured commit:** `2942719e6e35dd1027fba35b9e501d38f78884a3`
 
 | Measurement | Command | Result |
 |---|---|---|
-| Clean build | `cargo clean` then `cargo build --workspace` from the measured commit | `TBD-A` |
-| One-line rebuild through Godot | change exactly `WEATHER_BRIDGE_REV` from `remich-weather-v1` to `remich-weather-v2`, then rebuild and run the weather proof | `TBD-B` |
+| Clean build | `cargo clean` (removed 1.5 GiB / 2692 files) then `cargo build --workspace` from the measured commit | **54.10 s**, 31 crates compiled, **0 warnings**, exit 0 |
+| One-line rebuild through Godot | change exactly `WEATHER_BRIDGE_REV` from `remich-weather-v1` to `remich-weather-v2`, then rebuild and run the weather proof | incremental rebuild **0.81 s** + engine run **0.41 s** = **1.22 s** until Godot observed v2, 0 warnings, exit 0 |
 
 The one-line diff, for the record:
 
@@ -260,10 +260,15 @@ The one-line diff, for the record:
 ```
 
 The engine observed `rev=remich-weather-v2` in that run (expectation staged
-from the source, so a stale library would fail), then the line was restored
-byte-for-byte, rebuilt, and re-proved at `remich-weather-v1`. The sentinel
-`remich-weather-v2` survives only in this record and in the checker that
-names it.
+from the source, so a stale library would fail — a marker reading anything
+else would have failed the run), then the line was restored byte-for-byte
+(`git diff` empty against the measured commit, line 65 back to
+`remich-weather-v1`), rebuilt, and re-proved at `remich-weather-v1` with a
+weather trace whose SHA-256 is again
+`3686ae5d1abe7843d0a503a78b92ed2465381b359b4580369457648b86cd28b6` — the
+same bytes the deterministic runs produce. The sentinel `remich-weather-v2`
+survives only in this record and in the checker that names it (the checker
+constructs it at runtime so it never trips its own scan).
 
 **Final head:** this record's own commit follows the measured commit and
 contains documentation only — the exact final SHA is carried by the PR (a
@@ -272,8 +277,10 @@ file cannot contain the SHA of the commit that contains it).
 ## 9. Acceptance
 
 `bash tools/check_phase2_step2.sh` — 26 checks, including Step 1's
-`tools/check_phase2_step1.sh` run unchanged as a sub-check. Result on the
-final committed head: `TBD-ACCEPTANCE`.
+`tools/check_phase2_step1.sh` run unchanged as a sub-check. Result:
+**100 ok / 0 fail** (run at the measured commit; the final head differs only
+by this record, and the same run is repeated once on the final head before
+hand-back — its result is reported in the PR).
 
 Step 1's clock remains: integer-authoritative, one shared node,
 speed/pause-capable, float-sabotage-free; `REMICH_CLOCK_OK`,
