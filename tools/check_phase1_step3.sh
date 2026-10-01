@@ -45,13 +45,19 @@ ANVIL_MAIN="97c8fdbd7ff85779f33456fd7c444657f8d90b36"
 PROVENANCE_FORM="buggy-vault@24181142 repos/anvil/source/<path>"
 DATA_SHA="166104ba90e30446adfb8d15ec6e242a52567c979bccb274a7011296b163dba5"
 SENTINEL="remich-timing-probe"
-# Every `#[test]` in the two donor crates: 182 unit (anvil_sim 132 +
-# anvil_core 50) + 2 carried integration tests. Frozen for this step so that
-# deleting tests from the source cannot pass by matching a lowered count.
+# Every `#[test]` in the two donor crates: 185 unit (anvil_sim 135 +
+# anvil_core 50) + 2 carried integration tests. Frozen so that deleting tests
+# from the source cannot pass by matching a lowered count.
 # 183 was the count at the import; Remich issue #9 / Phase 3 Step 1 added
 # exactly one catalogue test (`embedded_catalogue_is_the_committed_file`),
 # which moved this ratchet to 184 — no other test was added or removed.
-EXPECTED_SOURCE_TESTS=184
+# Phase 3 Step 2 — soul primitives across the bridge imported two donor files
+# byte-identical: crates/anvil_sim/src/settlement/ids.rs (+0 tests) and
+# crates/anvil_sim/src/settlement/connection.rs (+3 tests), which is the whole
+# of 184 → 187. The four numbers (184 / +0 / +3 / 187) are recorded in
+# docs/anvil-import-phase1-step3.md §6 and §11; no test was added, removed or
+# weakened by hand, and no other donor file changed.
+EXPECTED_SOURCE_TESTS=187
 BRIDGE_PROBE_SOURCE="crates/remich_gdext/src/lib.rs"
 COMMITTED_BRIDGE_VALUE="remich-bridge-v1"
 TAKEN_DIRS=(crates/anvil_sim crates/anvil_core assets)
@@ -246,16 +252,21 @@ if [ -s "$LOG_DIR/inventory.tsv" ]; then
         pass "every inventoried destination exists and is tracked"
     fi
 
-    # Frozen inventory shape: 34 entries = 26 unchanged + 5 adapted + 1 new
+    # Frozen inventory shape: 36 entries = 28 unchanged + 5 adapted + 1 new
     # + 1 excerpt + 1 data (docs/anvil-import §4 "Counts"). It was 27
     # unchanged + 4 adapted until Remich issue #9 / Phase 3 Step 1 moved
     # crates/anvil_sim/src/actions/catalogue.rs from `unchanged` to
-    # `adapted`; no entry was added, removed or otherwise reclassified.
+    # `adapted`, with no entry added; and 34 entries = 26 unchanged until
+    # Phase 3 Step 2 — soul primitives across the bridge imported
+    # crates/anvil_sim/src/settlement/connection.rs and
+    # crates/anvil_sim/src/settlement/ids.rs, both byte-identical and so both
+    # `unchanged` (docs/anvil-import §4, §5.11, §11). Exact-file additions
+    # only: no entry was reclassified and no other file added.
     counts="$(cut -f3 "$LOG_DIR/inventory.tsv" | sort | uniq -c \
         | awk '{ printf "%s=%s ", $2, $1 }')"
-    expected_counts="adapted=5 data=1 excerpt=1 new=1 unchanged=26 "
+    expected_counts="adapted=5 data=1 excerpt=1 new=1 unchanged=28 "
     if [ "$counts" = "$expected_counts" ]; then
-        pass "inventory status counts match the recorded 34 entries: $counts"
+        pass "inventory status counts match the recorded 36 entries: $counts"
     else
         fail "inventory status counts are '$counts', expected '$expected_counts'"
     fi
@@ -368,8 +379,13 @@ if [ -s "$LOG_DIR/inventory.tsv" ]; then
             unchanged_bad=$((unchanged_bad + 1))
         fi
     done <"$LOG_DIR/inventory.tsv"
-    if [ "$unchanged_ok" -eq 26 ] && [ "$unchanged_bad" -eq 0 ]; then
-        pass "all 26 unchanged entries are byte-identical to the vault (sha256 vs git show $VAULT_COMMIT)"
+    # 26 byte-identical entries at the import, 28 since Phase 3 Step 2 — soul
+    # primitives across the bridge added settlement/connection.rs and
+    # settlement/ids.rs as `unchanged` (exact files, §4).
+    if [ "$unchanged_ok" -eq 28 ] && [ "$unchanged_bad" -eq 0 ]; then
+        pass "all 28 unchanged entries are byte-identical to the vault (sha256 vs git show $VAULT_COMMIT)"
+    else
+        fail "unchanged byte verification: ok=$unchanged_ok bad=$unchanged_bad, expected 28 identical and 0 mismatches"
     fi
 
     # An adapted .rs file must be the donor file minus whole lines only —
@@ -383,9 +399,30 @@ if [ -s "$LOG_DIR/inventory.tsv" ]; then
     # narrow instead, by the assertions in the branch below (canonical donor
     # provenance, still listed as adapted, the embedded loader and its
     # serde_json::from_str parse, no repo_path!/filesystem use in the non-test
-    # code, the qualified asset sha256, and the §5 documentation). Every other
-    # adapted .rs file keeps the pure-deletion rule unchanged.
+    # code, the qualified asset sha256, and the §5 documentation).
+    #
+    # Phase 3 Step 2 — soul primitives across the bridge names exactly one
+    # more exception: the already-pruned crates/anvil_sim/src/settlement/
+    # mod.rs had to DECLARE the two donor modules this step imports
+    # (settlement/connection.rs and settlement/ids.rs), so it gained lines
+    # instead of only losing them. Verification is not skipped for that file
+    # either — it is proved narrow instead, by the assertions in the branch
+    # below: the donor's own doc comment must survive verbatim, each added
+    # line must occur exactly once and be documented in the provenance
+    # record, the file minus exactly those lines must still be a pure
+    # line-deletion of its donor (so Phase 1's pruning and every donor byte it
+    # kept are untouched), and the Phase 1 keeps must still be there. Every
+    # other adapted .rs file keeps the pure-deletion rule unchanged.
     N9_CATALOGUE="crates/anvil_sim/src/actions/catalogue.rs"
+    P3S2_SETTLEMENT_MOD="crates/anvil_sim/src/settlement/mod.rs"
+    # The exact lines Phase 3 Step 2 added to it — all three are spelled
+    # identically in the donor's own settlement/mod.rs, and all three are
+    # documented in docs/anvil-import-phase1-step3.md §5.11 and §11.
+    P3S2_ADDED_LINES=(
+        'pub mod connection;'
+        'pub mod ids;'
+        'pub use connection::{Connection, ConnectionLayer};'
+    )
     while IFS=$'\t' read -r p prov st; do
         [ "$st" = "adapted" ] || continue
         [[ "$p" == *.rs ]] || continue
@@ -442,6 +479,86 @@ if [ -s "$LOG_DIR/inventory.tsv" ]; then
                 pass "the adaptation is documented as a dated post-import change in $PROVENANCE_DOC"
             else
                 fail "$PROVENANCE_DOC does not document the post-import Remich #9 adaptation"
+            fi
+            continue
+        fi
+        if [ "$p" = "$P3S2_SETTLEMENT_MOD" ]; then
+            # Phase 3 Step 2 — soul primitives across the bridge: the
+            # evidence for this second exception, written to the log.
+            pass "$p is inventoried as adapted (Phase 3 Step 2 — soul primitives across the bridge)"
+
+            donor_path="${prov#buggy-vault@24181142 }"
+            expected_prov="buggy-vault@24181142 repos/anvil/source/$P3S2_SETTLEMENT_MOD"
+            if [ "$prov" = "$expected_prov" ]; then
+                pass "$p keeps its canonical donor provenance: $prov"
+            else
+                fail "$p provenance is '$prov', expected '$expected_prov'"
+            fi
+
+            if ! git -C "$VAULT" show "$VAULT_COMMIT:$donor_path" \
+                    >"$LOG_DIR/settlement-mod.donor" 2>/dev/null; then
+                fail "$p: cannot read the donor file $VAULT_COMMIT:$donor_path"
+                continue
+            fi
+
+            # 1. Each added line occurs exactly once AND is documented.
+            p3s2_lines_ok=1
+            for line in "${P3S2_ADDED_LINES[@]}"; do
+                occurrences="$(grep -cxF -- "$line" "$p" || true)"
+                if [ "$occurrences" != "1" ]; then
+                    fail "$p: expected exactly one occurrence of '$line', found $occurrences"
+                    p3s2_lines_ok=0
+                fi
+                if ! grep -qF -- "$line" "$PROVENANCE_DOC"; then
+                    fail "$p: $PROVENANCE_DOC does not document the added line '$line'"
+                    p3s2_lines_ok=0
+                fi
+            done
+            if [ "$p3s2_lines_ok" -eq 1 ]; then
+                pass "$p carries exactly the three documented declaration lines, once each"
+            fi
+
+            # 2. The donor's own doc comment survives verbatim at the top.
+            if diff <(head -n 5 "$LOG_DIR/settlement-mod.donor") <(head -n 5 "$p") >/dev/null; then
+                pass "$p keeps the donor's original five doc-comment lines verbatim"
+            else
+                fail "$p does not keep the donor's original five doc-comment lines verbatim"
+            fi
+
+            # 3. Drop the leading //! block and the three added lines from
+            #    both sides: what remains must satisfy the Phase 1 rule — the
+            #    destination is a pure line-deletion of the donor. Anything
+            #    the exception does not cover still fails here.
+            dest_from="$(grep -n -m1 -v '^//!' "$p" | cut -d: -f1)"
+            donor_from="$(grep -n -m1 -v '^//!' "$LOG_DIR/settlement-mod.donor" | cut -d: -f1)"
+            tail -n "+$donor_from" "$LOG_DIR/settlement-mod.donor" >"$LOG_DIR/settlement-mod.donor.code"
+            tail -n "+$dest_from" "$p" >"$LOG_DIR/settlement-mod.dest.code"
+            for line in "${P3S2_ADDED_LINES[@]}"; do
+                grep -vxF -- "$line" "$LOG_DIR/settlement-mod.dest.code" \
+                    >"$LOG_DIR/settlement-mod.reduced" || true
+                mv "$LOG_DIR/settlement-mod.reduced" "$LOG_DIR/settlement-mod.dest.code"
+            done
+            if awk '
+                NR == FNR { donor[FNR] = $0; dn = FNR; next }
+                {
+                    i = last + 1
+                    while (i <= dn && donor[i] != $0) i++
+                    if (i > dn) { bad = 1; exit }
+                    last = i
+                }
+                END { if (bad) exit 1 }
+            ' "$LOG_DIR/settlement-mod.donor.code" "$LOG_DIR/settlement-mod.dest.code"; then
+                pass "$p minus the three documented lines is still a pure line-deletion of its donor"
+            else
+                fail "$p changed a byte outside Phase 1's deletions and the three documented lines"
+            fi
+
+            # 4. Phase 1's own keeps survived.
+            if grep -qxF 'pub mod skill;' "$LOG_DIR/settlement-mod.dest.code" \
+                    && grep -qxF 'pub use skill::Skill;' "$LOG_DIR/settlement-mod.dest.code"; then
+                pass "$p still carries the skill module and re-export Phase 1 kept"
+            else
+                fail "$p lost a declaration Phase 1 kept (skill)"
             fi
             continue
         fi

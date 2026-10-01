@@ -18,6 +18,10 @@ use godot::prelude::*;
 use remich_core::clock::WorldClock;
 use remich_core::decay::advance_needs;
 use remich_core::scorer::{self, ScorerInput, ScorerOutcome};
+use remich_core::soul::{
+    connection_layer_from_name, connection_layer_name, AxesSnapshot, SoulFacade,
+    SubstrateSnapshot,
+};
 use remich_core::weather::{
     StandInWeather, WeatherChannel, WeatherError, WeatherSnapshot, STAND_IN_DRIVER_ID,
 };
@@ -83,6 +87,18 @@ pub const WEATHER_BRIDGE_REV: &str = "remich-weather-v1";
 /// the save document carries its own `format_version`, and this marker is
 /// never serialized into game state.
 pub const SAVE_BRIDGE_REV: &str = "remich-save-v1";
+
+/// The revision marker carried by the soul surface (Phase 3, Step 2).
+///
+/// The same stale-library guard as the five markers above: `godot/soul_probe.gd`
+/// checks the value Godot observes against `godot/soul_probe_expectation.txt`,
+/// which `tools/stage_soul.sh` derives from this line — so a stale library
+/// cannot pass. Phase 3 Step 2's rebuild measurement changes exactly this
+/// line to `v2`, times the rebuild-through-engine path, and restores it;
+/// `tools/check_phase3_step2.sh` fails if any value other than the committed
+/// one survives outside documentation. It says nothing about donor behaviour:
+/// the propagated influence it labels is the donor's, unchanged.
+pub const SOUL_BRIDGE_REV: &str = "remich-soul-v1";
 
 /// The one shader global this binding writes.
 ///
@@ -1180,6 +1196,177 @@ fn failure(code: &str, message: &str) -> VarDictionary {
     result
 }
 
+/// The Godot-facing soul surface (docs/PLAN.md §4b, phase 3, step 2).
+///
+/// One narrow class over the engine-free `remich_core::soul` facade: create a
+/// soul from a seed, read the substrate and the four axes back, ask for the
+/// donor's propagated influence through a named connection layer, and read
+/// this library's revision. Every argument and every result is a plain value,
+/// an `Array` or a `Dictionary` — no Munshausen type, no Eisleck type, no
+/// Larochette node, no resource handle, and no emotion formula in GDScript:
+/// the calls below only convert and forward.
+///
+/// Deliberately absent, and checked as absent by
+/// `tools/check_phase3_step2.sh`: any event that changes an axis (need met or
+/// unmet, catastrophe felt), any call that writes an influence into a soul,
+/// and any weight or propagation formula of our own. The donor computes the
+/// influence; what it *means* for an inhabitant belongs to the lead's
+/// Munshausen wiring (docs/PLAN.md §4b, "Lead steps").
+#[derive(GodotClass)]
+#[class(base = Node)]
+pub struct RemichSoul {
+    base: Base<Node>,
+    /// The authoritative state: one engine-free facade, held in Rust.
+    soul: Option<SoulFacade>,
+}
+
+#[godot_api]
+impl INode for RemichSoul {
+    fn init(base: Base<Node>) -> Self {
+        Self { base, soul: None }
+    }
+}
+
+#[godot_api]
+impl RemichSoul {
+    /// Creates the soul from a seed with the donor's `LayeredSoul::from_seed`.
+    ///
+    /// Returns `ok`, `bridge_rev` and the seed echoed back. A negative seed
+    /// is refused outright rather than wrapped into a different one.
+    #[func]
+    fn initialize(&mut self, seed: i64) -> VarDictionary {
+        if seed < 0 {
+            return soul_failure("bad-input", "seed must not be negative");
+        }
+        self.soul = Some(SoulFacade::from_seed(seed as u64));
+        let mut result = VarDictionary::new();
+        result.set("ok", true);
+        result.set("bridge_rev", SOUL_BRIDGE_REV);
+        result.set("seed", seed);
+        result
+    }
+
+    /// Whether this class holds an initialized soul.
+    #[func]
+    fn is_initialized(&self) -> bool {
+        self.soul.is_some()
+    }
+
+    /// Reads the soul back: `seed`, `substrate` and the four `axes`, copied
+    /// from the donor's own fields. Read-only — there is no setter here.
+    #[func]
+    fn soul_snapshot(&self) -> VarDictionary {
+        let Some(soul) = &self.soul else {
+            return soul_failure("not-initialized", "call initialize(seed) first");
+        };
+        let snapshot = soul.snapshot();
+        let mut result = soul_ok();
+        result.set("seed", snapshot.seed as i64);
+        result.set("substrate", &substrate_dict(&snapshot.substrate));
+        result.set("axes", &axes_dict(&snapshot.axes));
+        result
+    }
+
+    /// The donor's edge strength for a named connection layer, on its own.
+    ///
+    /// The number comes from `ConnectionLayer::weight()`; an unknown layer
+    /// name is refused rather than replaced by a default.
+    #[func]
+    fn connection_weight(&self, layer: GString) -> VarDictionary {
+        let Some(soul) = &self.soul else {
+            return soul_failure("not-initialized", "call initialize(seed) first");
+        };
+        let Some(connection) = connection_layer_from_name(&layer.to_string()) else {
+            return soul_failure(
+                "unknown-layer",
+                &format!("'{layer}' is not a donor connection layer (family, proximity, village)"),
+            );
+        };
+        let mut result = soul_ok();
+        result.set("layer", connection_layer_name(connection));
+        result.set("connection_weight", f64::from(soul.connection_weight(connection)));
+        result
+    }
+
+    /// The donor's propagated influence through a named connection layer.
+    ///
+    /// Returns `ok`, `bridge_rev`, `layer`, `connection_weight`, the
+    /// `source_axes` this influence was computed from, and
+    /// `propagated_influence` — the four donor values. The influence is
+    /// labelled as exactly that: it is **not** a new state for any soul, and
+    /// this class writes nothing back. An unknown layer name is refused
+    /// rather than substituted.
+    #[func]
+    fn propagate(&self, layer: GString) -> VarDictionary {
+        let Some(soul) = &self.soul else {
+            return soul_failure("not-initialized", "call initialize(seed) first");
+        };
+        let Some(connection) = connection_layer_from_name(&layer.to_string()) else {
+            return soul_failure(
+                "unknown-layer",
+                &format!("'{layer}' is not a donor connection layer (family, proximity, village)"),
+            );
+        };
+
+        let influence = soul.propagate(connection);
+        let snapshot = soul.snapshot();
+        let mut result = soul_ok();
+        result.set("layer", connection_layer_name(influence.layer));
+        result.set("connection_weight", f64::from(influence.connection_weight));
+        result.set("source_axes", &axes_dict(&snapshot.axes));
+        result.set("propagated_influence", &axes_dict(&influence.axes));
+        result.set("value_kind", "propagated-influence");
+        result.set("receiver_state_changed", false);
+        result
+    }
+
+    /// The revision marker this library was built with, on its own.
+    #[func]
+    fn soul_bridge_rev(&self) -> GString {
+        SOUL_BRIDGE_REV.into()
+    }
+}
+
+/// A successful soul result: `ok` plus the revision every successful call
+/// carries.
+fn soul_ok() -> VarDictionary {
+    let mut result = VarDictionary::new();
+    result.set("ok", true);
+    result.set("bridge_rev", SOUL_BRIDGE_REV);
+    result
+}
+
+/// A refused soul request: says why, substitutes nothing.
+fn soul_failure(code: &str, message: &str) -> VarDictionary {
+    godot_error!("RemichSoul: {code}: {message}");
+    let mut result = VarDictionary::new();
+    result.set("ok", false);
+    result.set("bridge_rev", SOUL_BRIDGE_REV);
+    result.set("code", code);
+    result.set("error", message);
+    result
+}
+
+/// The four axes as a plain dictionary, in the donor's field order.
+fn axes_dict(axes: &AxesSnapshot) -> VarDictionary {
+    let mut result = VarDictionary::new();
+    result.set("security_threat", f64::from(axes.security_threat));
+    result.set("belonging_isolation", f64::from(axes.belonging_isolation));
+    result.set("agency_helplessness", f64::from(axes.agency_helplessness));
+    result.set("satiation_desperation", f64::from(axes.satiation_desperation));
+    result
+}
+
+/// The three substrate traits as a plain dictionary, in the donor's field
+/// order.
+fn substrate_dict(substrate: &SubstrateSnapshot) -> VarDictionary {
+    let mut result = VarDictionary::new();
+    result.set("courage_fear", f64::from(substrate.courage_fear));
+    result.set("generosity_selfishness", f64::from(substrate.generosity_selfishness));
+    result.set("stability_anxiety", f64::from(substrate.stability_anxiety));
+    result
+}
+
 /// The library's entry point type tag; `#[gdextension]` emits the
 /// `gdext_rust_init` symbol that `godot/remich.gdextension` names.
 struct RemichExtension;
@@ -1250,6 +1437,16 @@ mod tests {
             !core_save.contains(SAVE_BRIDGE_REV),
             "the bridge revision must never appear in the engine-free save core"
         );
+    }
+
+    /// The soul revision marker is the one line Phase 3 Step 2's rebuild
+    /// measurement changes (`v1` -> `v2`, then restored), so it must keep the
+    /// shape `tools/stage_soul.sh` parses and hold the committed value. It is
+    /// also the marker `godot/soul_probe.gd` reads back from the engine.
+    #[test]
+    fn soul_bridge_rev_is_the_committed_marker() {
+        assert_eq!(SOUL_BRIDGE_REV, "remich-soul-v1");
+        assert!(SOUL_BRIDGE_REV.starts_with("remich-soul-"));
     }
 
     /// The pinned Grengewald contract (standing ruling 1): exactly this

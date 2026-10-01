@@ -23,6 +23,9 @@
 //!   tool identity as a plain string, the clock, the weather and the
 //!   stand-in inhabitant, plus identity-change adaptation with an explicit
 //!   drop report (Phase 2, Step 3).
+//! * [`soul`] — soul primitives across the bridge: seed creation, reading the
+//!   substrate and the four axes, and the donor's own propagation returning
+//!   a propagated influence (Phase 3, Step 2).
 
 /// The name this crate answers to across the boundary.
 pub const CORE_NAME: &str = "remich_core";
@@ -38,6 +41,9 @@ pub mod weather;
 /// The game's save: versioned document, adaptation, explicit drop reports
 /// (Phase 2, Step 3).
 pub mod save;
+/// Soul primitives: donor seed creation, reads, and the donor's propagated
+/// influence (Phase 3, Step 2). Adapter only — no formula of our own.
+pub mod soul;
 
 #[cfg(test)]
 mod tests {

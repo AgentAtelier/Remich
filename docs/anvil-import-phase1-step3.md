@@ -108,7 +108,9 @@ crates/anvil_sim/src/time.rs :: buggy-vault@24181142 repos/anvil/source/crates/a
 crates/anvil_sim/src/age.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/age.rs :: unchanged :: AgeCategory, required field type of Action
 crates/anvil_sim/src/soul.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/soul.rs :: unchanged :: EmotionalState and Substrate, required parameters of the scorer
 crates/anvil_sim/src/soul/axes.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/soul/axes.rs :: unchanged :: EmotionalAxes, embedded in EmotionalState (soul.rs pub mod axes)
-crates/anvil_sim/src/settlement/mod.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/settlement/mod.rs :: adapted :: module root so crate::settlement::skill resolves
+crates/anvil_sim/src/settlement/connection.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/settlement/connection.rs :: unchanged :: Connection and ConnectionLayer, the donor's named edge strengths the soul fixture asks for (Phase 3 Step 2 — soul primitives across the bridge, §5.11, §11)
+crates/anvil_sim/src/settlement/ids.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/settlement/ids.rs :: unchanged :: PersonId newtype, required by connection.rs and nothing else (Phase 3 Step 2 — soul primitives across the bridge, §5.11, §11)
+crates/anvil_sim/src/settlement/mod.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/settlement/mod.rs :: adapted :: module root so crate::settlement::skill resolves; since Phase 3 Step 2 it also declares the two modules above (§5.4, §5.11)
 crates/anvil_sim/src/settlement/skill.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/settlement/skill.rs :: unchanged :: Skill enum, required parameter of scoring::skill_modifier
 crates/anvil_sim/src/skill/mod.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/skill/mod.rs :: adapted :: module root so crate::skill::AffordanceId and crate::skill::domain resolve
 crates/anvil_sim/src/skill/affordance.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/skill/affordance.rs :: unchanged :: AffordanceId, required field type of Action
@@ -117,16 +119,23 @@ crates/anvil_sim/tests/npc_determinism_carried.rs :: new file carrying a byte-id
 assets/sim/actions.json :: anvil-bundle@97c8fdbd assets/sim/actions.json :: data :: runtime action-catalogue data loaded by actions/catalogue.rs; lead-authorized provenance exception (§2.1)
 <!-- step3-inventory:end -->
 
-Counts: 34 entries = **26 unchanged** files byte-identical to `24181142…`
-(26 `.rs`), + **5 adapted** (2 adapted `.rs` module roots, 2 adapted
+Counts: 36 entries = **28 unchanged** files byte-identical to `24181142…`
+(28 `.rs`), + **5 adapted** (2 adapted `.rs` module roots, 2 adapted
 `Cargo.toml` files, and `crates/anvil_sim/src/actions/catalogue.rs`) + **1
 new** Remich-authored `.rs` file + **1 excerpt** file + **1 data** file.
 
 At the original import this record read 27 unchanged + 4 adapted; the one
 status change since is `crates/anvil_sim/src/actions/catalogue.rs`,
 `unchanged` → `adapted`, made on 2026-10-01 under Remich issue #9 / Phase 3
-Step 1 (§5.10). Its provenance line is untouched, no file was added or
-removed, and no other entry's status moved.
+Step 1 (§5.10). Its provenance line is untouched and no other entry's status
+moved.
+
+Mechanical addition, 2026-10-01: Phase 3 Step 2 — soul primitives across the
+bridge imported two further donor files, both byte-identical and therefore
+both `unchanged` — `crates/anvil_sim/src/settlement/connection.rs` and
+`crates/anvil_sim/src/settlement/ids.rs` (§5.11, §11). 34 → 36 entries and
+26 → 28 unchanged; no entry was reclassified, no file was removed, and no
+other file was added.
 
 ## 5. Every adaptation made after copying
 
@@ -153,11 +162,15 @@ changes, each change listed").
    `anvil_core`, `serde`, `serde_json`, `thiserror`). A comment in the manifest
    records the removal. No other line changed.
 4. **Import/module-path adaptation — `crates/anvil_sim/src/settlement/mod.rs`.**
-   Removed module declarations `catalyst`, `connection`, `family`, `ids`,
-   `memory`, `person`, `settlement_type` and their seven `pub use` re-exports;
+   Removed module declarations `catalyst`, `family`, `memory`,
+   `person`, `settlement_type` and six of their seven `pub use` re-exports;
    kept the file's doc comment, `pub mod skill;` and `pub use skill::Skill;`.
-   The change is a pure deletion of declarations for subsystems not taken —
-   verified by diff: no other byte differs.
+   As imported, the change was a pure deletion of declarations for subsystems
+   not taken — verified by diff: no other byte differs. **Post-import
+   addition:** on 2026-10-01 Phase 3 Step 2 — soul primitives across the
+   bridge re-declared the donor's `connection` and `ids` modules and one
+   re-export, and added a doc comment; item 11 below states the exact lines
+   and §11 states why. Everything else in this file is unchanged.
 5. **Import/module-path adaptation — `crates/anvil_sim/src/skill/mod.rs`.**
    Removed module declarations `catalogue`, `event`, `fluency`, `perceptibility`,
    `practice`, `profile` and their six `pub use` re-exports; kept the doc
@@ -224,13 +237,41 @@ changes, each change listed").
    which is why the frozen donor source-test count moved 183 → 184 (§6). The
    file's status moved `unchanged` → `adapted`; its provenance line did not.
 
+11. **Post-import addition (2026-10-01) — `crates/anvil_sim/src/settlement/mod.rs`,
+   Phase 3 Step 2 — soul primitives across the bridge.** This item was **not**
+   part of the Phase 1 Step 3 import; it is recorded here because this document
+   is the inventory of record for that file. Step 2 needs the donor's named
+   edge strengths (`ConnectionLayer::weight()`) for its three-stand-in
+   fixture, and that type lives in `settlement/connection.rs`, which is
+   parameterised by `settlement/ids.rs::PersonId`. Both files were imported
+   byte-identical (§4, §11), so this module root has to declare them.
+   **Exactly what changed** — these added lines and no other byte: a doc
+   comment naming this step, the pruning that stays, and both donor
+   provenance paths; plus
+
+   ```rust
+   pub mod connection;
+   pub mod ids;
+
+   pub use connection::{Connection, ConnectionLayer};
+   ```
+
+   (spelled exactly as in the donor's own `settlement/mod.rs`). **Exactly
+   what did not change:** the Phase 1 pruning of `catalyst`, `family`,
+   `memory`, `person`, `settlement_type` and their six re-exports;
+   `pub mod skill;` and `pub use skill::Skill;`; and the original five
+   doc-comment lines. No donor file other than the two byte-identical
+   imports was touched, and `tools/check_phase1_step3.sh` proves the file is
+   still the donor minus Phase 1's deletions plus exactly these lines.
+
 No other post-copy change was made during the import: items 1-9 are the whole
 of the Phase 1 Step 3 adaptation list, and for them no formula was tuned, no
 concept renamed, no algorithm simplified, no donor API reshaped for the Godot
 bridge (that is Step 4), no visibility changed, no warning or style cleanup, and
 no engine-facing code had to be removed — the donor sim code was already
-engine-free. Item 10 is the single later, dated, lead-authorized adaptation
-described above.
+engine-free. Items 10 and 11 are the two later, dated adaptations: each names
+the step that made it and is recorded with that step's own records, and neither
+changed a donor file, a donor formula or a donor test.
 
 ## 6. Donor tests: what runs, what was not carried (and exactly why)
 
@@ -241,7 +282,7 @@ Command: `cargo test -p anvil_core -p anvil_sim` (and via
 
 | Test target | Result |
 |---|---|
-| `anvil_sim` unit tests (inline in the copied sources + the 2 carried RNG tests) | **132 passed, 0 failed, 0 ignored** (131 at the import + the post-import Remich #9 test, §5.10) |
+| `anvil_sim` unit tests (inline in the copied sources + the 2 carried RNG tests) | **135 passed, 0 failed, 0 ignored** (131 at the import + the post-import Remich #9 test, §5.10, + the 3 `settlement/connection.rs` donor tests, §5.11) |
 | `anvil_sim` integration `tests/npc_determinism_carried.rs` (carried excerpt) | **2 passed, 0 failed** |
 | `anvil_core` unit tests (inline in the copied sources) | **50 passed, 0 failed, 0 ignored** |
 | `anvil_core` doc-tests | 3 passed, 1 ignored, in the two batches rustdoc emits: `2 passed; 0 failed; 1 ignored` (the ignore is the donor's own ` ```ignore ` example in `error.rs`, copied byte-identically — not ours), then `1 passed; 0 failed; 0 ignored` (the donor's compile-fail doctest in `ids.rs`) |
@@ -254,15 +295,21 @@ sources — executed count must equal source count):
 `needs.rs` 5 · `actions.rs` 12 · `actions/catalogue.rs` 10 (9 at the import +
 the Remich #9 test, §5.10) ·
 `utility/scoring.rs` 17 · `time.rs` 9 · `age.rs` 17 · `soul.rs` 23 ·
-`soul/axes.rs` 24 · `settlement/skill.rs` 1 · `skill/affordance.rs` 9 ·
-`skill/domain.rs` 3 · `anvil_sim/src/lib.rs` (carried RNG tests) 2 → **132** ·
+`soul/axes.rs` 24 · `settlement/connection.rs` 3 (Phase 3 Step 2, §5.11) ·
+`settlement/ids.rs` 0 ·
+`settlement/skill.rs` 1 · `skill/affordance.rs` 9 ·
+`skill/domain.rs` 3 · `anvil_sim/src/lib.rs` (carried RNG tests) 2 → **135** ·
 `anvil_core`: `lib.rs` 5 · `asset_request.rs` 12 · `connections.rs` 16 ·
 `error.rs` 8 · `semantic.rs` 9 → **50**.
 
-So the source `#[test]` count of the two donor crates is **184** since
-2026-10-01 (132 + 50 + 2 carried integration), against the 183 this step
-recorded at the import; `tools/check_phase1_step3.sh` freezes 184 because
-Remich #9 added exactly one catalogue test and no other.
+So the source `#[test]` count of the two donor crates is **187** since
+2026-10-01 (135 + 50 + 2 carried integration), against the 183 this step
+recorded at the import. All four numbers of the last move, mechanically:
+184 at the Step 1 head, +0 tests contributed by the newly imported
+`settlement/ids.rs`, +3 contributed by `settlement/connection.rs`, = 187
+(§11). `tools/check_phase1_step3.sh` freezes 187 because every one of those
+tests comes from a byte-identical donor file's own source — no test was
+added, removed or weakened to reach the number.
 
 These cover every copied component: needs, actions + catalogue (including the
 real `actions.json` load and every catalogue-content assertion), utility
@@ -338,3 +385,67 @@ every tracked file.
 The revert was itself observed as a rebuild: after removing the line, `cargo
 build --workspace` recompiled `anvil_sim` again (0.21 s), proving the file was
 byte-different from the probe state — i.e. the probe did not linger.
+
+## 11. Phase 3 Step 2 — soul primitives across the bridge (2026-10-01)
+
+A dated addition to this record. Nothing above was rewritten to make it look
+as though these files were imported in Phase 1, and no timing record in §10
+changed.
+
+**Donor identity, unchanged.** Read-only `buggy-vault` at
+`24181142c693be37f90a6a667a6dc493425cd832`, preserving original anvil main
+`97c8fdbd7ff85779f33456fd7c444657f8d90b36`; canonical provenance stays
+`buggy-vault@24181142 repos/anvil/source/<path>`; no upstream fetch; the vault
+working tree is clean.
+
+**Every donor file this step uses:**
+
+| File | Status this step | Why it is needed |
+|---|---|---|
+| `crates/anvil_sim/src/soul.rs` | `unchanged`, still donor-identical — verified byte-for-byte against the pin before any work (sha256 `72b6d1ed66aec8dfc55b7cf768804ad99e9efa869426c3b68b3577d7b3d284cd`) and never edited | `Substrate::from_seed`, `LayeredSoul::from_seed`, `EmotionalState`: the soul that is created from a seed and read back |
+| `crates/anvil_sim/src/soul/axes.rs` | `unchanged`, still donor-identical — same verification (sha256 `f038823f43ea9560c8d6e0abc659307b99dd5cb5b2d35a26d9ab47e9d3c66c20`) and never edited | `EmotionalAxes` and `EmotionalAxes::propagate(connection_weight)`: the propagation calculation itself |
+| `crates/anvil_sim/src/settlement/connection.rs` | `unchanged` — **newly imported** byte-identical (sha256 `252c99e2b06081569272cf2cba7a66d973a9a1ca61d610c858bec0d29797fce7`) | `ConnectionLayer::weight()` — the donor's named edge strengths. The fixture needs `Family`, `Proximity` and `Village` strengths, so it asks the donor for them instead of inventing Remich constants |
+| `crates/anvil_sim/src/settlement/ids.rs` | `unchanged` — **newly imported** byte-identical (sha256 `a315bf7fa6e6e0d8a36dcf6383b33fb656dfd285e5d54ab8c141be1893b42a74`) | `PersonId`, the newtype `connection.rs` is parameterised by. The closure is exactly these two files plus `anvil_core` and `serde`; nothing broader was needed, so no stop condition arose |
+| `crates/anvil_sim/src/settlement/mod.rs` | `adapted` — the addition is stated line-by-line in §5.11 | declares and exposes the two modules above and re-exports `Connection`/`ConnectionLayer`, which is all this step needs from the module root |
+
+**Exact module wiring.** `settlement/mod.rs` gained a doc comment naming this
+step and these three donor-spelled lines:
+
+```rust
+pub mod connection;
+pub mod ids;
+
+pub use connection::{Connection, ConnectionLayer};
+```
+
+Phase 1's pruning of `catalyst`, `family`, `memory`, `person`,
+`settlement_type` and their six re-exports is intact, `pub mod skill;` and
+`pub use skill::Skill;` are untouched, and no other settlement file was taken.
+
+**Not taken — stated explicitly.** Not `Person`, not `Family`, not
+`Settlement`, not `Memory`, not the donor NPC system, not settlement economy
+behaviour, not additional skill state, not any unrelated settlement file.
+**`system/npc` remains untaken**: the donor audit established that it contains
+none of the missing emotional semantics, this step did not import it, and it
+was not used as a container merely because it already has persons and
+settlements. Phase 3 Step 5 remains conditional and is not triggered by this
+step.
+
+**What the donor supplies, and what it does not — the limitation this step is
+built on.** The pinned donor supplies **propagated influence**: given a
+connection weight, `EmotionalAxes::propagate(connection_weight)` returns four
+influence values. It supplies **no receiver application**: there is no
+`target += influence`, no blending, no clamping of a receiver after
+influence, no aggregation from multiple neighbours, no update ordering, no
+contextual contagion asymmetry and no event→axis mutation anywhere in the
+pinned donor. Remich therefore added none of them. **Propagated influence ≠
+updated receiver mood.** Remich's own tests assert the soul snapshot is
+bit-for-bit unchanged across the propagation call, and the engine probe
+asserts the same again inside pinned Godot.
+
+**Inventory counts (mechanical).** 34 → 36 entries; 26 → 28 `unchanged`; the
+five `adapted`, one `new`, one `excerpt` and one `data` entry are exactly as
+before (§4). Donor source `#[test]` count 184 → 187: **184** at the Step 1
+head, **+0** contributed by `settlement/ids.rs`, **+3** contributed by
+`settlement/connection.rs`, **= 187**, with no test added, removed or
+weakened by hand (§6).
