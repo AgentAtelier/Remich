@@ -12,3 +12,9 @@ publish = false
 # donor import `anvil_sim` — which is engine-free too — because the adapter's
 # whole job is to call the donor scorer rather than re-implement it.
 anvil_sim = { path = "../anvil_sim" }
+
+# Serialization for the game's save (Phase 2, Step 3): plain data only, and
+# engine-free like everything else in this crate. Versions come from the
+# workspace's shared dependency table.
+serde = { workspace = true }
+serde_json = { workspace = true }

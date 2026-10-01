@@ -22,6 +22,12 @@ use remich_core::weather::{
     StandInWeather, WeatherChannel, WeatherError, WeatherSnapshot, STAND_IN_DRIVER_ID,
 };
 
+// The game's save surface (Phase 2, Step 3): file access and plain-value
+// conversion live there; the engine-free document itself lives in
+// `remich_core::save`.
+mod save;
+pub use save::RemichGameSave;
+
 /// The single value Remich's bridge probe hands to Godot.
 ///
 /// This is a probe, not game behaviour: it exists only so the engine has
@@ -63,6 +69,20 @@ pub const CLOCK_BRIDGE_REV: &str = "remich-clock-v1";
 /// restores it; `tools/check_phase2_step2.sh` fails if any value other than
 /// the committed one survives outside documentation.
 pub const WEATHER_BRIDGE_REV: &str = "remich-weather-v1";
+
+/// The revision marker carried by the game's save surface.
+///
+/// The same stale-library guard as the four markers above, for the save
+/// (Phase 2, Step 3): `godot/save_probe.gd` checks the value Godot observes
+/// against `godot/save_probe_expectation.txt`, which `tools/stage_save.sh`
+/// derives from this line — so a stale library cannot pass. The step's
+/// rebuild measurement changes exactly this line to `v2`, times the
+/// rebuild-through-engine path, and restores it;
+/// `tools/check_phase2_step3.sh` fails if any value other than the committed
+/// one survives outside documentation. It is implementation evidence only:
+/// the save document carries its own `format_version`, and this marker is
+/// never serialized into game state.
+pub const SAVE_BRIDGE_REV: &str = "remich-save-v1";
 
 /// The one shader global this binding writes.
 ///
@@ -427,6 +447,72 @@ impl RemichWorldClock {
         }
     }
 
+    /// The clock's whole state, read for the game's save (Phase 2, Step 3):
+    /// tick, fixed tick length, speed and pause as plain values. No
+    /// wall-clock reading happens here — this clock has none to read.
+    #[func]
+    fn capture_state(&self) -> VarDictionary {
+        let Some(clock) = self.clock.as_ref() else {
+            return clock_failure("not-initialized", "call initialize first");
+        };
+        let state = clock.capture_state();
+        let mut result = VarDictionary::new();
+        result.set("ok", true);
+        result.set("bridge_rev", CLOCK_BRIDGE_REV);
+        result.set("tick", state.tick as i64);
+        result.set("tick_length_ns", state.tick_length_ns as i64);
+        result.set("speed", i64::from(state.speed));
+        result.set("paused", state.paused);
+        result
+    }
+
+    /// Replaces this clock's whole state from a validated save (Phase 2,
+    /// Step 3). This is the one sanctioned full-state replacement: it mutates
+    /// **the same native clock** the autoload holds — no second clock is ever
+    /// created — and it validates the state the same way construction does
+    /// (a zero tick length or a zero speed is refused and nothing changes).
+    #[func]
+    fn restore_state(&mut self, state: VarDictionary) -> VarDictionary {
+        let Some(clock) = self.clock.as_mut() else {
+            return clock_failure("not-initialized", "call initialize first");
+        };
+        let parsed = (|| -> Result<remich_core::clock::ClockState, String> {
+            let tick = plain_integer(&field(&state, "tick")?, "clock state tick")?;
+            let tick_length_ns =
+                plain_integer(&field(&state, "tick_length_ns")?, "clock state tick_length_ns")?;
+            let speed = plain_integer(&field(&state, "speed")?, "clock state speed")?;
+            let paused = field(&state, "paused")?
+                .try_to::<bool>()
+                .map_err(|_| "clock state paused must be a bool".to_string())?;
+            if speed > u64::from(u32::MAX) {
+                return Err("clock state speed exceeds u32".to_string());
+            }
+            Ok(remich_core::clock::ClockState {
+                tick,
+                tick_length_ns,
+                speed: speed as u32,
+                paused,
+            })
+        })();
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(message) => return clock_failure("bad-input", &message),
+        };
+        match clock.restore_state(parsed) {
+            Ok(()) => {
+                let mut result = VarDictionary::new();
+                result.set("ok", true);
+                result.set("bridge_rev", CLOCK_BRIDGE_REV);
+                result.set("tick", parsed.tick as i64);
+                result.set("tick_length_ns", parsed.tick_length_ns as i64);
+                result.set("speed", i64::from(parsed.speed));
+                result.set("paused", parsed.paused);
+                result
+            }
+            Err(error) => clock_failure("bad-input", &error.to_string()),
+        }
+    }
+
     /// The revision marker this library was built with, on its own.
     #[func]
     fn clock_bridge_rev(&self) -> GString {
@@ -748,6 +834,73 @@ impl RemichWeather {
         applied_array
     }
 
+    /// The save-restore path (Phase 2, Step 3): re-publishes a **validated
+    /// saved snapshot** through the channel's legitimate owner.
+    ///
+    /// This is not a weather setter: it does not accept arbitrary values
+    /// from a live caller — it takes the `{seed, cycle_length, snapshot}`
+    /// structure a loaded save produced, verifies the seed and cycle length
+    /// against the run's already-constructed stand-in driver (those two are
+    /// fixture configuration fixed at construction, saved for integrity and
+    /// never swapped under a live channel), and then publishes the snapshot
+    /// with `channel.publish(STAND_IN_DRIVER_ID, ..)` — the same one-writer
+    /// API `drive` uses. A second writer still cannot publish: the channel
+    /// stays owned by the stand-in driver, and every existing refusal
+    /// (including Step 2's second-writer proof) still holds. The
+    /// presentation phase is **not** restored — it is derived again from the
+    /// restored integer tick when the wind global is next applied.
+    #[func]
+    fn restore_save_state(&mut self, state: VarDictionary) -> VarDictionary {
+        let (Some(channel), Some(stand_in)) = (&mut self.channel, &self.stand_in) else {
+            return weather_failure("not-initialized", "call initialize first");
+        };
+        let parsed = (|| -> Result<(u64, u64, WeatherSnapshot), String> {
+            let seed = plain_integer(&field(&state, "seed")?, "saved weather seed")?;
+            let cycle_length =
+                plain_integer(&field(&state, "cycle_length")?, "saved weather cycle_length")?;
+            let snapshot =
+                snapshot_from_dictionary(&field(&state, "snapshot")?.try_to::<VarDictionary>()
+                    .map_err(|_| "saved weather snapshot must be a dictionary".to_string())?)?;
+            Ok((seed, cycle_length, snapshot))
+        })();
+        let (seed, cycle_length, snapshot) = match parsed {
+            Ok(parsed) => parsed,
+            Err(message) => return weather_failure("bad-input", &message),
+        };
+        if seed != stand_in.seed() {
+            return weather_failure(
+                "fixture-mismatch",
+                &format!(
+                    "the save's weather seed {seed} is not this run's stand-in seed {}",
+                    stand_in.seed()
+                ),
+            );
+        }
+        if cycle_length != stand_in.cycle_length() {
+            return weather_failure(
+                "fixture-mismatch",
+                &format!(
+                    "the save's weather cycle length {cycle_length} is not this run's {}",
+                    stand_in.cycle_length()
+                ),
+            );
+        }
+        match channel.publish(STAND_IN_DRIVER_ID, snapshot) {
+            Ok(()) => {
+                self.last_applied = None;
+                let mut result = VarDictionary::new();
+                result.set("ok", true);
+                result.set("bridge_rev", WEATHER_BRIDGE_REV);
+                result.set("writer", STAND_IN_DRIVER_ID);
+                result.set("seed", seed as i64);
+                result.set("cycle_length", cycle_length as i64);
+                result.set("tick", snapshot.tick as i64);
+                result
+            }
+            Err(error) => weather_refusal(&error),
+        }
+    }
+
     /// The revision marker this library was built with, on its own.
     #[func]
     fn weather_bridge_rev(&self) -> GString {
@@ -757,7 +910,7 @@ impl RemichWeather {
 
 /// The published snapshot as plain Godot data. Plain reads only: this is the
 /// same Rust struct the channel holds, handed across the boundary.
-fn snapshot_dictionary(snapshot: &WeatherSnapshot, seed: u64) -> VarDictionary {
+pub(crate) fn snapshot_dictionary(snapshot: &WeatherSnapshot, seed: u64) -> VarDictionary {
     let mut result = VarDictionary::new();
     result.set("ok", true);
     result.set("bridge_rev", WEATHER_BRIDGE_REV);
@@ -770,6 +923,35 @@ fn snapshot_dictionary(snapshot: &WeatherSnapshot, seed: u64) -> VarDictionary {
     result.set("temperature", snapshot.temperature);
     result.set("light", snapshot.light);
     result
+}
+
+/// Reads the seven plain snapshot fields back out of a dictionary — the
+/// inverse of [`snapshot_dictionary`], used by the save paths. The extra
+/// keys a live read carries (`ok`, `bridge_rev`, `seed`) are ignored; every
+/// snapshot field itself is required, and the values go through
+/// [`WeatherSnapshot::new`]'s validation, so a malformed structure is
+/// refused rather than defaulted.
+pub(crate) fn snapshot_from_dictionary(
+    input: &VarDictionary,
+) -> Result<WeatherSnapshot, String> {
+    let tick = plain_integer(&field(input, "tick")?, "snapshot tick")?;
+    let wind_dir_x = plain_number(&field(input, "wind_dir_x")?, "snapshot wind_dir_x")?;
+    let wind_dir_z = plain_number(&field(input, "wind_dir_z")?, "snapshot wind_dir_z")?;
+    let wind_strength =
+        plain_number(&field(input, "wind_strength")?, "snapshot wind_strength")?;
+    let rain = plain_number(&field(input, "rain")?, "snapshot rain")?;
+    let temperature = plain_number(&field(input, "temperature")?, "snapshot temperature")?;
+    let light = plain_number(&field(input, "light")?, "snapshot light")?;
+    WeatherSnapshot::new(
+        tick,
+        wind_dir_x,
+        wind_dir_z,
+        wind_strength,
+        rain,
+        temperature,
+        light,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// A refused weather request: says why, substitutes nothing. An ownership
@@ -813,14 +995,14 @@ fn weather_failure(code: &str, message: &str) -> VarDictionary {
 // ---------------------------------------------------------------------------
 
 /// Reads a required field, naming it when it is missing.
-fn field(input: &VarDictionary, key: &str) -> Result<Variant, String> {
+pub(crate) fn field(input: &VarDictionary, key: &str) -> Result<Variant, String> {
     input
         .get(key)
         .ok_or_else(|| format!("missing required field '{key}'"))
 }
 
 /// Reads a number; an integer is accepted where a number is wanted.
-fn plain_number(value: &Variant, what: &str) -> Result<f64, String> {
+pub(crate) fn plain_number(value: &Variant, what: &str) -> Result<f64, String> {
     if let Ok(number) = value.try_to::<f64>() {
         return Ok(number);
     }
@@ -834,7 +1016,7 @@ fn plain_number(value: &Variant, what: &str) -> Result<f64, String> {
 }
 
 /// Reads a non-negative integer, allowing a whole-number float through.
-fn plain_integer(value: &Variant, what: &str) -> Result<u64, String> {
+pub(crate) fn plain_integer(value: &Variant, what: &str) -> Result<u64, String> {
     if let Ok(number) = value.try_to::<i64>() {
         if number < 0 {
             return Err(format!("{what} must not be negative, got {number}"));
@@ -849,7 +1031,7 @@ fn plain_integer(value: &Variant, what: &str) -> Result<u64, String> {
 }
 
 /// Reads a string.
-fn plain_text(value: &Variant, what: &str) -> Result<String, String> {
+pub(crate) fn plain_text(value: &Variant, what: &str) -> Result<String, String> {
     value
         .try_to::<GString>()
         .map(|text| text.to_string())
@@ -857,7 +1039,7 @@ fn plain_text(value: &Variant, what: &str) -> Result<String, String> {
 }
 
 /// Reads the seven need values out of a plain array.
-fn plain_needs(values: &VarArray) -> Result<[f32; scorer::NEED_COUNT], String> {
+pub(crate) fn plain_needs(values: &VarArray) -> Result<[f32; scorer::NEED_COUNT], String> {
     if values.len() != scorer::NEED_COUNT {
         return Err(format!(
             "expected {} need values, got {}",
@@ -954,7 +1136,7 @@ fn parse_score_input(input: &VarDictionary) -> Result<ScorerInput, String> {
 }
 
 /// The plain seven-value need array, as Godot receives it.
-fn need_array(needs: &[f32; scorer::NEED_COUNT]) -> VarArray {
+pub(crate) fn need_array(needs: &[f32; scorer::NEED_COUNT]) -> VarArray {
     let mut values = VarArray::new();
     for value in needs {
         values.push(f64::from(*value));
@@ -1052,6 +1234,22 @@ mod tests {
     fn weather_bridge_rev_is_the_committed_marker() {
         assert_eq!(WEATHER_BRIDGE_REV, "remich-weather-v1");
         assert!(WEATHER_BRIDGE_REV.starts_with("remich-weather-"));
+    }
+
+    /// The save revision marker is the one line Phase 2 Step 3's rebuild
+    /// measurement changes (`v1` -> `v2`, then restored), so it must keep the
+    /// shape `tools/stage_save.sh` parses and hold the committed value. It
+    /// stays out of the engine-free core: the save document carries its own
+    /// `format_version`, and this marker is implementation evidence only.
+    #[test]
+    fn save_bridge_rev_is_the_committed_marker() {
+        assert_eq!(SAVE_BRIDGE_REV, "remich-save-v1");
+        assert!(SAVE_BRIDGE_REV.starts_with("remich-save-"));
+        let core_save = include_str!("../../remich_core/src/save.rs");
+        assert!(
+            !core_save.contains(SAVE_BRIDGE_REV),
+            "the bridge revision must never appear in the engine-free save core"
+        );
     }
 
     /// The pinned Grengewald contract (standing ruling 1): exactly this

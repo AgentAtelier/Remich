@@ -42,6 +42,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// The one stand-in driver's writer identity (docs/PLAN.md §4a, step 2: the
 /// driver now is a stand-in schedule, to be replaced by Eisleck).
 pub const STAND_IN_DRIVER_ID: &str = "stand-in-weather-schedule";
@@ -142,7 +144,12 @@ impl std::error::Error for WeatherError {}
 /// `tick` is the integer simulation tick **for which** this snapshot applies
 /// (the shared world clock's tick at publish time, handed in by the driver).
 /// The snapshot never advances it; it is a label, not a clock.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// The serde derives (Phase 2, Step 3) exist so the game's save can hold a
+/// snapshot verbatim: they serialize the fields in declaration order and add
+/// no state of their own — in particular no presentation phase, which stays
+/// derived from the tick at the renderer's edge.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct WeatherSnapshot {
     /// The integer simulation tick this snapshot applies to.
     pub tick: u64,

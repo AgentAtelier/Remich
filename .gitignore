@@ -12,6 +12,7 @@
 /godot/scorer_probe_expectation.txt
 /godot/clock_probe_expectation.txt
 /godot/weather_probe_expectation.txt
+/godot/save_probe_expectation.txt
 
 # The step-5 day harness's runtime trace (REMICH_DAY_TRACE_PATH). Generated
 # state, never committed: the acceptance writes these under /tmp, and this
@@ -20,6 +21,11 @@ day_trace*.jsonl
 
 # The phase-2 step-2 weather trace (REMICH_WEATHER_TRACE_PATH), same rule.
 weather_trace*.jsonl
+
+# The phase-2 step-3 continuation traces (REMICH_SAVE_TRACE), same rule:
+# the acceptance writes them under /tmp, and this pattern covers one pointed
+# inside the working tree by hand.
+save_trace*.jsonl
 
 # The GDExtension binary itself: target/ already covers it, but say so twice
 # because a stray copy next to the project would be loadable and therefore

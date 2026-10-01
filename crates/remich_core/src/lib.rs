@@ -19,6 +19,10 @@
 //!   length, pause and speed (Phase 2, Step 1).
 //! * [`weather`] — the one weather snapshot: plain data, one writer, readers
 //!   everywhere, plus the small stand-in driver (Phase 2, Step 2).
+//! * [`save`] — the game's save: a narrow versioned document holding the
+//!   tool identity as a plain string, the clock, the weather and the
+//!   stand-in inhabitant, plus identity-change adaptation with an explicit
+//!   drop report (Phase 2, Step 3).
 
 /// The name this crate answers to across the boundary.
 pub const CORE_NAME: &str = "remich_core";
@@ -31,6 +35,9 @@ pub mod clock;
 pub mod scorer;
 /// The one weather snapshot: one writer, plain-data reads, stand-in driver.
 pub mod weather;
+/// The game's save: versioned document, adaptation, explicit drop reports
+/// (Phase 2, Step 3).
+pub mod save;
 
 #[cfg(test)]
 mod tests {

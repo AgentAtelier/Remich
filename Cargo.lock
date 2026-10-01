@@ -169,6 +169,8 @@ name = "remich_core"
 version = "0.1.0"
 dependencies = [
  "anvil_sim",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
