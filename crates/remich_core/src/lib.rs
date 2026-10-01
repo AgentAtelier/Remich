@@ -15,12 +15,16 @@
 //!   pick the highest score the way the donor picks it.
 //! * [`decay`] — apply the donor's need-decay semantics to plain need data as
 //!   ticks advance.
+//! * [`clock`] — the one world clock: integer ticks, a fixed integer tick
+//!   length, pause and speed (Phase 2, Step 1).
 
 /// The name this crate answers to across the boundary.
 pub const CORE_NAME: &str = "remich_core";
 
 /// Plain-data need decay as ticks advance, with the donor's decay semantics.
 pub mod decay;
+/// The one world clock: integer ticks, fixed tick length, pause and speed.
+pub mod clock;
 /// Plain-data scoring: the adapter over the donor's utility scorer.
 pub mod scorer;
 

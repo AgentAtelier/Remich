@@ -14,6 +14,7 @@
 
 use godot::prelude::*;
 
+use remich_core::clock::WorldClock;
 use remich_core::decay::advance_needs;
 use remich_core::scorer::{self, ScorerInput, ScorerOutcome};
 
@@ -36,6 +37,17 @@ pub const BRIDGE_PROBE_VALUE: &str = "remich-bridge-v1";
 /// Step 4's rebuild measurement changes exactly this line to `v2` and then
 /// restores it; `tools/check_phase1_step4.sh` fails if it is left changed.
 pub const SCORER_BRIDGE_REV: &str = "remich-scorer-v1";
+
+/// The revision marker carried by the shared world clock node.
+///
+/// The same stale-library guard as the two markers above, for the clock:
+/// `godot/clock_probe.gd` checks the value Godot observes against
+/// `godot/clock_probe_expectation.txt`, which `tools/stage_clock.sh` derives
+/// from this line. Phase 2 Step 1's rebuild measurement changes exactly this
+/// line to `v2`, times the rebuild-through-engine path, and restores it;
+/// `tools/check_phase2_step1.sh` fails if any value other than the committed
+/// one survives outside documentation.
+pub const CLOCK_BRIDGE_REV: &str = "remich-clock-v1";
 
 /// The layer's own name, mirrored from the engine-free side of the boundary.
 pub const LAYER_NAME: &str = "remich_gdext";
@@ -176,6 +188,234 @@ impl RemichScorer {
     fn scorer_bridge_rev(&self) -> GString {
         SCORER_BRIDGE_REV.into()
     }
+}
+
+/// The Godot-facing world clock (docs/PLAN.md, phase 2, step 1).
+///
+/// The authoritative state lives in the engine-free `remich_core::clock`
+/// [`WorldClock`] held by this class; this layer only exposes it and drives
+/// it. Exactly one instance of this class is meant to exist in the test
+/// project — `godot/world_clock.gd` instantiates the single shared node and
+/// every other script reaches the clock through that node, never with a
+/// second copy of the tick.
+///
+/// Everything observable is integer: `tick` (`i64`), `tick_length_ns`
+/// (`i64`), `speed` (`i64`), `is_paused` (bool). Advancement happens only in
+/// [`RemichWorldClock::pulse`], which takes **no** arguments — there is no
+/// float `delta` parameter and no API that advances by seconds.
+#[derive(GodotClass)]
+#[class(base = Node)]
+pub struct RemichWorldClock {
+    base: Base<Node>,
+    /// The one authoritative clock. Created once by [`Self::initialize`].
+    clock: Option<WorldClock>,
+}
+
+#[godot_api]
+impl INode for RemichWorldClock {
+    fn init(base: Base<Node>) -> Self {
+        Self { base, clock: None }
+    }
+}
+
+#[godot_api]
+impl RemichWorldClock {
+    /// Creates the authoritative clock with the fixed tick length, in whole
+    /// nanoseconds, supplied by the test project. The value is integer state
+    /// and stays immutable for the life of the clock. A zero (or negative)
+    /// length is refused; so is a second initialization, because the tick
+    /// length must never change under a running clock.
+    #[func]
+    fn initialize(&mut self, tick_length_ns: i64) -> VarDictionary {
+        if self.clock.is_some() {
+            return clock_failure(
+                "already-initialized",
+                "the tick length is fixed at construction",
+            );
+        }
+        if tick_length_ns <= 0 {
+            return clock_failure(
+                "bad-input",
+                "tick length must be a positive number of nanoseconds",
+            );
+        }
+        match WorldClock::new(tick_length_ns as u64) {
+            Ok(clock) => {
+                self.clock = Some(clock);
+                let mut result = VarDictionary::new();
+                result.set("ok", true);
+                result.set("bridge_rev", CLOCK_BRIDGE_REV);
+                result.set("tick_length_ns", tick_length_ns);
+                result
+            }
+            Err(error) => clock_failure("init-failed", &error.to_string()),
+        }
+    }
+
+    /// Whether [`Self::initialize`] has succeeded yet.
+    #[func]
+    fn is_initialized(&self) -> bool {
+        self.clock.is_some()
+    }
+
+    /// The authoritative integer tick. `-1` before initialization.
+    #[func]
+    fn tick(&self) -> i64 {
+        match &self.clock {
+            Some(clock) => clock.tick() as i64,
+            None => -1,
+        }
+    }
+
+    /// The fixed tick length in whole nanoseconds. `-1` before
+    /// initialization.
+    #[func]
+    fn tick_length_ns(&self) -> i64 {
+        match &self.clock {
+            Some(clock) => clock.tick_length_ns() as i64,
+            None => -1,
+        }
+    }
+
+    /// The integer speed multiplier. `0` before initialization.
+    #[func]
+    fn speed(&self) -> i64 {
+        match &self.clock {
+            Some(clock) => i64::from(clock.speed()),
+            None => 0,
+        }
+    }
+
+    /// Whether the clock is paused (uninitialized counts as not running:
+    /// it emits nothing either way).
+    #[func]
+    fn is_paused(&self) -> bool {
+        match &self.clock {
+            Some(clock) => clock.is_paused(),
+            None => true,
+        }
+    }
+
+    /// Sets the integer speed multiplier (≥ 1). `0` is refused — pause is
+    /// how a clock stops, not a speed of zero.
+    #[func]
+    fn set_speed(&mut self, speed: i64) -> VarDictionary {
+        let Some(clock) = self.clock.as_mut() else {
+            return clock_failure("not-initialized", "call initialize first");
+        };
+        if speed < 1 || speed > i64::from(u32::MAX) {
+            return clock_failure("bad-input", "speed must be an integer of at least 1");
+        }
+        match clock.set_speed(speed as u32) {
+            Ok(()) => {
+                let mut result = VarDictionary::new();
+                result.set("ok", true);
+                result.set("bridge_rev", CLOCK_BRIDGE_REV);
+                result.set("speed", speed);
+                result
+            }
+            Err(error) => clock_failure("bad-input", &error.to_string()),
+        }
+    }
+
+    /// Pauses the clock: pulses emit nothing until [`Self::resume`].
+    #[func]
+    fn pause(&mut self) -> VarDictionary {
+        let Some(clock) = self.clock.as_mut() else {
+            return clock_failure("not-initialized", "call initialize first");
+        };
+        clock.pause();
+        let mut result = VarDictionary::new();
+        result.set("ok", true);
+        result.set("bridge_rev", CLOCK_BRIDGE_REV);
+        result.set("paused", true);
+        result
+    }
+
+    /// Resumes the clock at exactly the next integer tick, at the retained
+    /// speed.
+    #[func]
+    fn resume(&mut self) -> VarDictionary {
+        let Some(clock) = self.clock.as_mut() else {
+            return clock_failure("not-initialized", "call initialize first");
+        };
+        clock.resume();
+        let mut result = VarDictionary::new();
+        result.set("ok", true);
+        result.set("bridge_rev", CLOCK_BRIDGE_REV);
+        result.set("paused", false);
+        result
+    }
+
+    /// Re-positions the clock at an explicit integer tick (fixture setup).
+    #[func]
+    fn reset(&mut self, tick: i64) -> VarDictionary {
+        let Some(clock) = self.clock.as_mut() else {
+            return clock_failure("not-initialized", "call initialize first");
+        };
+        if tick < 0 {
+            return clock_failure("bad-input", "tick must not be negative");
+        }
+        clock.reset(tick as u64);
+        let mut result = VarDictionary::new();
+        result.set("ok", true);
+        result.set("bridge_rev", CLOCK_BRIDGE_REV);
+        result.set("tick", tick);
+        result
+    }
+
+    /// One driver pulse: returns every tick made available by this pulse, in
+    /// order — `speed` consecutive integers at speed 1/4, none while paused.
+    /// Takes no arguments: there is no delta, no seconds, no float input of
+    /// any kind. Consumers iterate the returned ticks and process each one.
+    #[func]
+    fn pulse(&mut self) -> VarArray {
+        let mut ticks = VarArray::new();
+        let Some(clock) = self.clock.as_mut() else {
+            godot_error!("RemichWorldClock: pulse before initialize");
+            return ticks;
+        };
+        for tick in clock.pulse().ticks() {
+            ticks.push(tick as i64);
+        }
+        ticks
+    }
+
+    /// Presents an integer tick as a position inside a caller-supplied
+    /// cycle — the one float conversion, at the edge, for values like
+    /// normalized time of day. The caller must state the cycle length; the
+    /// clock never decides one. Returns `-1.0` (and logs) for a bad input.
+    #[func]
+    fn cycle_position(&self, tick: i64, cycle_length: i64) -> f64 {
+        if tick < 0 || cycle_length <= 0 {
+            godot_error!("RemichWorldClock: cycle_position needs tick >= 0 and cycle_length >= 1");
+            return -1.0;
+        }
+        match WorldClock::cycle_position(tick as u64, cycle_length as u64) {
+            Ok(position) => position,
+            Err(error) => {
+                godot_error!("RemichWorldClock: {error}");
+                -1.0
+            }
+        }
+    }
+
+    /// The revision marker this library was built with, on its own.
+    #[func]
+    fn clock_bridge_rev(&self) -> GString {
+        CLOCK_BRIDGE_REV.into()
+    }
+}
+
+/// A refused clock request: says why, substitutes nothing.
+fn clock_failure(code: &str, message: &str) -> VarDictionary {
+    godot_error!("RemichWorldClock: {code}: {message}");
+    let mut result = VarDictionary::new();
+    result.set("ok", false);
+    result.set("bridge_rev", CLOCK_BRIDGE_REV);
+    result.set("code", code);
+    result.set("error", message);
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +645,15 @@ mod tests {
     fn scorer_bridge_rev_is_the_committed_marker() {
         assert_eq!(SCORER_BRIDGE_REV, "remich-scorer-v1");
         assert!(SCORER_BRIDGE_REV.starts_with("remich-scorer-"));
+    }
+
+    /// The clock revision marker is the one line Step 1's rebuild measurement
+    /// changes (`v1` -> `v2`, then restored), so it must keep the shape
+    /// `tools/stage_clock.sh` parses and hold the committed value.
+    #[test]
+    fn clock_bridge_rev_is_the_committed_marker() {
+        assert_eq!(CLOCK_BRIDGE_REV, "remich-clock-v1");
+        assert!(CLOCK_BRIDGE_REV.starts_with("remich-clock-"));
     }
 
     /// The Godot layer converts and forwards: it never scores.
