@@ -112,6 +112,15 @@ PLAN_DOC="docs/PLAN.md"
 # plan after $STEP3_MERGE). docs/PLAN.md's freeze point is PLAN_FREEZE
 # below — the lead's Phase 3 Step 2 re-scope.
 N9_CATALOGUE="crates/anvil_sim/src/actions/catalogue.rs"
+# Phase 3 Step 2 — soul primitives across the bridge: exactly three donor
+# files under crates/anvil_sim/src/settlement/ — two imported byte-identical
+# (connection.rs and ids.rs) and the already-pruned module root that now
+# declares them. Their byte-identity and the exact mod.rs addition are
+# proved by tools/check_phase1_step3.sh, which the chain runs as a sub-check;
+# they are named here, as exact paths, and nothing else is excepted.
+P3S2_CONNECTION="crates/anvil_sim/src/settlement/connection.rs"
+P3S2_IDS="crates/anvil_sim/src/settlement/ids.rs"
+P3S2_SETTLEMENT_MOD="crates/anvil_sim/src/settlement/mod.rs"
 N9_PROVENANCE="docs/anvil-import-phase1-step3.md"
 N9_RECORD="docs/remich-catalogue-phase3-step1.md"
 PLAN_MERGE="cfa796cc4885432da93b1974602ef3ba9a7cbff8"
@@ -320,10 +329,15 @@ header "3. Donor code/data and provenance remain untouched, bar the authorized R
 # catalogue embedding, and the provenance record that documents it (guarded
 # by the Step 3 sub-check). docs/PLAN.md is frozen byte-for-byte at
 # $PLAN_FREEZE, the lead's Phase 3 Step 2 re-scope.
+# Phase 3 Step 2 — soul primitives across the bridge: the three exact
+# donor files it imported/adapted under crates/anvil_sim/src/settlement/
+# are named exceptions too — their byte-identity is proved by the Step 3
+# sub-check, not skipped here.
 donor_delta="$(git diff --name-only "$STEP3_MERGE" -- \
     crates/anvil_sim crates/anvil_core assets docs/anvil-import-phase1-step3.md \
     2>/dev/null \
-    | grep -vxF -e "$N9_CATALOGUE" -e "$N9_PROVENANCE" || true)"
+    | grep -vxF -e "$N9_CATALOGUE" -e "$N9_PROVENANCE" \
+        -e "$P3S2_CONNECTION" -e "$P3S2_IDS" -e "$P3S2_SETTLEMENT_MOD" || true)"
 plan_delta=""
 if ! git diff --quiet "$PLAN_FREEZE" -- "$PLAN_DOC" 2>/dev/null; then
     plan_delta="$PLAN_DOC"
@@ -360,16 +374,32 @@ fi
 # ------------------------- 4. scorer implementation unchanged; v1 restored
 header "4. The scorer implementation and formulas are unchanged since Step 3"
 
-# Remich issue #9 / Phase 3 Step 1: the authorized catalogue embedding is the
-# only Rust file this ratchet allows to differ, and it changes how the
-# catalogue reaches the scorer, never the scorer — the committed bridge
-# revision, the formulas and the smoke run below still pin the behaviour.
+# Remich issue #9 / Phase 3 Step 1: the authorized catalogue embedding is a
+# named exception, and it changes how the catalogue reaches the scorer, never
+# the scorer — the committed bridge revision, the formulas and the smoke run
+# below still pin the behaviour.
+# Phase 3 Step 2 — soul primitives across the bridge: six exact Rust files are
+# named exceptions — the two byte-identical donor files, the module root that
+# declares them, the engine-free soul facade and its crate root, and the
+# binding that exposes the new class. This step does not touch the scorer, its
+# formulas or its committed bridge revision: SCORER_BRIDGE_REV below, the
+# formula assertions and the smoke run still pin them, and the scorer's own
+# tests run in the sub-checks.
+P3S2_RUST_FILES=(
+    "$P3S2_CONNECTION" "$P3S2_IDS" "$P3S2_SETTLEMENT_MOD"
+    crates/remich_core/src/lib.rs crates/remich_core/src/soul.rs
+    crates/remich_gdext/src/lib.rs
+)
+rust_filters=(-e "$N9_CATALOGUE")
+for p3s2_file in "${P3S2_RUST_FILES[@]}"; do
+    rust_filters+=(-e "$p3s2_file")
+done
 rust_delta="$(git diff --name-only "$STEP3_MERGE" -- crates/ 2>/dev/null \
-    | grep -vxF "$N9_CATALOGUE" || true)"
+    | grep -vxF "${rust_filters[@]}" || true)"
 if [ -z "$rust_delta" ]; then
-    pass "no Rust source changed but for the authorized $N9_CATALOGUE — the scorer core, the binding, the save, the weather and the clock are exactly as merged"
+    pass "no Rust source changed but for the authorized $N9_CATALOGUE and the six named Phase 3 Step 2 soul files — the scorer core, its formulas and its committed bridge revision are exactly as merged"
 else
-    fail "Rust source changed since the Step 3 merge beyond the Remich #9 catalogue embedding:"
+    fail "Rust source changed since the Step 3 merge beyond the Remich #9 and Phase 3 Step 2 named files:"
     printf '%s\n' "$rust_delta" | sed 's/^/      | /'
 fi
 
@@ -428,14 +458,27 @@ while IFS= read -r file; do
             | tools/check_phase1_step5.sh | tools/check_phase2_step1.sh \
             | tools/check_phase2_step2.sh | tools/check_phase2_step3.sh \
             | tools/check_phase3_step1.sh | tools/check_catalogue_relocation.sh) ;;
+        # Phase 3 Step 2 — soul primitives across the bridge: the narrow donor
+        # import (two byte-identical files plus the module root that declares
+        # them), the engine-free soul facade and its binding class, the
+        # standalone probe, the two scripts that stage and run it, this
+        # checker's own ratchet edits, its ignore rule, and the step's record.
+        crates/anvil_sim/src/settlement/connection.rs \
+            | crates/anvil_sim/src/settlement/ids.rs \
+            | crates/anvil_sim/src/settlement/mod.rs \
+            | crates/remich_core/src/lib.rs | crates/remich_core/src/soul.rs \
+            | crates/remich_gdext/src/lib.rs | godot/soul_probe.gd \
+            | tools/stage_soul.sh | tools/run_soul.sh \
+            | tools/check_phase3_step2.sh | .gitignore \
+            | docs/remich-soul-primitives-phase3-step2.md) ;;
         *) allowed="$allowed$file
 " ;;
     esac
 done <<<"$delta"
 if [ -z "$allowed" ]; then
-    pass "the only files changed since the Step 3 merge are the benchmark's own files and the files Remich #9 / Phase 3 Step 1 names"
+    pass "the only files changed since the Step 3 merge are the benchmark's own files, the files Remich #9 / Phase 3 Step 1 names, and the exact Phase 3 Step 2 — soul primitives across the bridge files"
 else
-    fail "files outside this step's benchmark-only scope changed:"
+    fail "files outside this step's benchmark-only scope (and outside the named Remich #9 / Phase 3 Step 2 sets) changed:"
     printf '%s' "$allowed" | sed 's/^/      | /'
 fi
 
@@ -901,17 +944,31 @@ else
                 | tools/check_phase2_step1.sh | tools/check_phase2_step2.sh \
                 | tools/check_phase2_step3.sh | tools/check_phase3_step1.sh \
                 | tools/check_catalogue_relocation.sh) ;;
+            # Phase 3 Step 2 — soul primitives across the bridge: the same
+            # exact file set that step may carry past its own measured
+            # commit, plus this checker's ratchet edit (docs/ is already
+            # allowed by the branch above, so the step's record needs no
+            # entry here).
+            crates/anvil_sim/src/settlement/connection.rs \
+                | crates/anvil_sim/src/settlement/ids.rs \
+                | crates/anvil_sim/src/settlement/mod.rs \
+                | crates/remich_core/src/lib.rs \
+                | crates/remich_core/src/soul.rs \
+                | crates/remich_gdext/src/lib.rs | godot/soul_probe.gd \
+                | tools/stage_soul.sh | tools/run_soul.sh \
+                | tools/check_phase3_step2.sh | .gitignore \
+                | tools/check_phase2_step4.sh) ;;
             *) non_doc="$non_doc      | $file
 " ;;
         esac
     done <<<"$final_delta"
     if [ -n "$non_doc" ]; then
-        fail "the measured -> final diff contains files beyond documentation and the named Remich #9 set:"
+        fail "the measured -> final diff contains files beyond documentation and the named Remich #9 / Phase 3 Step 2 sets:"
         printf '%s' "$non_doc"
     elif [ -z "$final_delta" ]; then
         fail "the final head does not differ from the measured commit by the record"
     else
-        pass "measured -> final differs by documentation only, plus the named Remich #9 files:"
+        pass "measured -> final differs by documentation only, plus the named Remich #9 and Phase 3 Step 2 files:"
         printf '%s\n' "$final_delta" | sed 's/^/      | /'
     fi
 fi

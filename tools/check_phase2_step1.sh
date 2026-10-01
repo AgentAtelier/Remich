@@ -82,6 +82,15 @@ PLAN_DOC="docs/PLAN.md"
 # can no longer match it byte for byte). docs/PLAN.md's freeze point is
 # PLAN_FREEZE below — the lead's Phase 3 Step 2 re-scope.
 N9_CATALOGUE="crates/anvil_sim/src/actions/catalogue.rs"
+# Phase 3 Step 2 — soul primitives across the bridge: exactly three donor
+# files under crates/anvil_sim/src/settlement/ — two imported byte-identical
+# (connection.rs and ids.rs) and the already-pruned module root that now
+# declares them. Their byte-identity and the exact mod.rs addition are
+# proved by tools/check_phase1_step3.sh, which this step runs as a sub-check;
+# they are named here, as exact paths, and nothing else is excepted.
+P3S2_CONNECTION="crates/anvil_sim/src/settlement/connection.rs"
+P3S2_IDS="crates/anvil_sim/src/settlement/ids.rs"
+P3S2_SETTLEMENT_MOD="crates/anvil_sim/src/settlement/mod.rs"
 PLAN_MERGE="cfa796cc4885432da93b1974602ef3ba9a7cbff8"
 # Remich Phase 3 Step 2 — soul primitives across the bridge (the lead's
 # docs-only plan re-scope, 2026-10-01): docs/PLAN.md's byte-for-byte freeze
@@ -157,9 +166,14 @@ fi
 # extended by the lead's Phase 3 plan merge after this base, then amended by
 # the lead's Phase 3 Step 2 re-scope, so it is frozen byte-for-byte at
 # $PLAN_FREEZE instead, which still forbids rewriting it here.
+# Phase 3 Step 2 — soul primitives across the bridge: the three exact donor
+# files it imported/adapted under settlement/ are named exceptions too —
+# their byte-identity is proved by the Step 3 sub-check, not skipped here.
 donor_delta="$(git diff --name-only "$PHASE2_PLAN_MERGE" -- \
     crates/anvil_sim crates/anvil_core assets "$STEP3_DOC" 2>/dev/null \
-    | grep -vxF "$N9_CATALOGUE" | grep -vxF "$STEP3_DOC" || true)"
+    | grep -vxF -e "$N9_CATALOGUE" -e "$STEP3_DOC" \
+        -e "$P3S2_CONNECTION" -e "$P3S2_IDS" -e "$P3S2_SETTLEMENT_MOD" \
+    || true)"
 plan_delta=""
 if ! git diff --quiet "$PLAN_FREEZE" -- "$PLAN_DOC" 2>/dev/null; then
     plan_delta="$PLAN_DOC"
