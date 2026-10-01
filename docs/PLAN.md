@@ -14,7 +14,7 @@ The owner's Rust projects (anvil, Forgeborn, Forge; in `buggy-vault/repos/`) hol
 engineering of the estate and the game's written vision: **Forgeborn** — a game about inhabiting a
 world, not conquering it; the world is the principal threat; people cope and find joy (anvil
 `docs/ANVIL_GAME_DESIGN.md`; the owner: "Yes forgeborn is the vision"). Their simulation core
-(`anvil_sim`: needs, utility-driven actions, a layered soul with emotions that spread, skills learned
+(`anvil_sim`: needs, utility-driven actions, a layered soul with four emotional axes, skills learned
 by doing and watching, age, settlements, catastrophes, Social LOD) is engine-free Rust. The work was
 abandoned because Bevy made builds slow. Godot replaces Bevy; what is missing is **a bridge that lets
 engine-free Rust run inside the Godot game**, with builds fast enough to work with. That bridge is
@@ -150,44 +150,55 @@ needs actually do.
 ## 4b. Phase 3 — anvil's people and the world's threats, across the bridge (opened 2026-10-01)
 
 **Why.** Forgeborn is the game's vision (owner, 2026-09-30): people who cope and find joy, and a world
-that is the main threat. anvil already holds first passes of both: a layered soul with emotions
-that spread, skills learned by doing and watching, catastrophes as signals that propagate. Phase 1
+that is the main threat. anvil already holds first passes of both: a layered soul with four emotional
+axes, skills learned by doing and watching, catastrophes as signals that propagate. Phase 1
 and 2 proved the bridge, the clock, one weather snapshot and the save. Phase 3 brings those anvil
 systems across **unchanged** (donor imports with provenance, as in phase 1), callable from Godot,
 proven in Remich's own test project. What they *mean* for Ada (Munshausen) and for the weather
 (Eisleck) stays with the owner and the lead.
 
 **What the owner sees at the end, honestly.** Nothing new in Larochette until the lead wires it. In
-Remich's test project: three stand-in inhabitants whose moods move with what happens to them and
-spread between them; one who gets better at a task by doing it and another by watching; a storm that
-arrives as an anvil catastrophe signal, raises the wind in the one weather snapshot (the same global
-Grengewald's trees read), and that every inhabitant's mood feels. All as traces and numbers.
+Remich's test project: three stand-in inhabitants created from seeds and read back with their
+substrate and four axes, with the donor's propagation calculation called and its result shown; one
+who gets better at a task by doing it and another by watching; a storm that arrives as an anvil
+catastrophe signal and raises the wind in the one weather snapshot (the same global Grengewald's
+trees read). All as traces and numbers.
 
 **Steps (the lane), in order:**
 
 1. **The embedded catalogue (issue #9).** As ruled there: the action catalogue compiled into the
    library, the donor adaptation recorded, the ratchets updated. *Acceptance:* the library scores
    correctly after its build checkout is moved.
-2. **The soul across the bridge.** anvil's layered soul (`soul/`, `soul.rs`: traits from a seed, the
-   four emotional axes) callable from Godot: create from a seed, apply an event (a need met or unmet,
-   a catastrophe felt), read the axes; emotions spread between inhabitants close to each other
-   (anvil's contagion, as it is). Deterministic. *Acceptance:* the same seed and events give a
-   byte-identical mood trace for three stand-ins; a sabotage test that disables contagion changes it.
+2. **Soul primitives across the bridge.** anvil's layered soul (`soul/`, `soul.rs`: traits from a
+   seed, the four emotional axes) callable from Godot: create a `LayeredSoul` from a seed, read the
+   substrate and the four axes, and call the donor's `EmotionalAxes::propagate(connection_weight)`
+   (and `ConnectionLayer::weight()` where the fixture needs an edge weight). Deterministic. *Donor
+   audit (2026-10-01, `buggy-vault@24181142`, pinned anvil): the donor has no event→axis response —
+   no need met or unmet, no catastrophe felt — and no application of propagated influence to a
+   receiving soul (`propagate` returns an influence and has no donor caller); `system/npc` was
+   inspected, holds none of it, and stays untaken.* *Acceptance:* the same seed and fixture give a
+   byte-identical trace for three stand-ins, and the bridge is shown to return the donor propagation
+   result unchanged; a test-only bypass of the propagation call must change that trace, reported as
+   propagated influence, not mood spreading.
 3. **Skills by doing and by watching.** anvil's `skill/` (practice, fluency, profile, perceptibility):
    practising raises fluency; an inhabitant who can perceive another practising learns more slowly by
    watching. *Acceptance:* a trace where the doer's fluency rises faster than the watcher's, and a
    watcher who cannot perceive learns nothing; deterministic.
 4. **Catastrophes as signals.** anvil's `catastrophe/` (event, signal, propagation) callable: a seeded
    event (a storm) propagates its signal; behind a switch it drives the weather snapshot (phase 2
-   step 2) instead of the stand-in schedule, and inhabitants feel it through step 2. "Predictable in
-   kind, unpredictable in timing" (Forgeborn) is anvil's, unchanged. *Acceptance:* with the switch on,
-   the wind global follows the storm; off, the stand-in schedule as before; deterministic by seed.
+   step 2) instead of the stand-in schedule. "Predictable in kind, unpredictable in timing"
+   (Forgeborn) is anvil's, unchanged. *Acceptance:* with the switch on, the wind global follows the
+   storm; off, the stand-in schedule as before; deterministic by seed.
 5. **What `system/npc` needs.** The donor's `system/npc` module (its `mod.rs` preserved as
    `kimi_npc_mod.rs`, §3) is taken only if steps 2–4 need it, repaired with every change listed.
    Otherwise recorded as not taken.
 
 **Lead steps (not the lane):** wiring soul, skills and catastrophes into Larochette (Munshausen's
-Ada, Eisleck's weather); what they should mean in the game, with the owner.
+Ada, Eisleck's weather); what they should mean in the game, with the owner — and specifically the
+emotional behaviour anvil never implemented: the event→axis mapping (what a need met or unmet, or a
+catastrophe felt, does to the four axes), how propagated influence is incorporated into a receiving
+soul, how several influences are aggregated and in what order the axes update, and any contextual
+asymmetry of contagion. None of that is Remich's to author.
 
 **Done when:** steps 1–4 (and 5 if needed) are merged with their acceptance and rebuild times posted.
 
