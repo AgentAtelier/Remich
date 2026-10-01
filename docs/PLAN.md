@@ -1,12 +1,84 @@
 # Plan — Remich (the Rust bridge): the destination, and phase 1
 
-Status: current plan, owner direction 2026-09-30; **phase 3 opened 2026-10-01** (§4b; owner: a lane that finished its phase gets the next). Phase 2's steps 1–4 are merged (#12 last); issue #9 (the embedded catalogue) is phase 3's first step. Y-R is the lead's (Larochette #18). Remich is **lane 4** of the second round.
-lanes run is in Yolanda's
+Status: **closed 2026-10-01** (owner decision, plan B; the closing record is below). Until then it
+was the current plan, owner direction 2026-09-30; **phase 3 opened 2026-10-01** (§4b; owner: a lane
+that finished its phase gets the next). Phase 2's steps 1–4 are merged (#12 last); issue #9 (the
+embedded catalogue) was phase 3's first step. Y-R is the lead's (Larochette #18). Remich was
+**lane 4** of the second round.
+How lanes ran is in Yolanda's
 [docs/orchestration/LANES.md](https://github.com/AgentAtelier/Yolanda/blob/main/docs/orchestration/LANES.md);
-this plan says where it differs. Background: Yolanda's
+this plan said where it differed. Background: Yolanda's
 [background/RUST-REVIEW-2026-09-26](https://github.com/AgentAtelier/Yolanda/blob/main/docs/background/RUST-REVIEW-2026-09-26.md)
 and [background/archaeology-2026-09-30](https://github.com/AgentAtelier/Yolanda/tree/main/docs/background/archaeology-2026-09-30)
 (reports 1 and 3).
+
+## Closing record — 2026-10-01 (owner, plan B)
+
+The owner closed the second round's lanes on 2026-10-01: each lane first finishes only what the
+exported game shows, then merges a **docs-only closing record**. The next focus is the first tiny
+game for itch.io. Remich's work does not reach Larochette until the lead wires it, so this lane
+closes now. The rules are Yolanda's
+[docs/orchestration/LANES.md](https://github.com/AgentAtelier/Yolanda/blob/main/docs/orchestration/LANES.md),
+"Closing the lanes" and "Closing the second round": every capability marked done with its pull
+request, what is left marked **not built** (not silently dropped), test debt as issues (standing
+ruling 5), and the lane's plan status set to closed. **No new Remich capability step starts from
+this plan.**
+
+**Done, each with its pull request**
+
+| Step or document | State | Pull request |
+|---|---|---|
+| Phase 1 step 1 — the repository's shape | **done** | [#2](https://github.com/AgentAtelier/Remich/pull/2) |
+| Phase 1 step 2 — the bridge exists | **done** | [#3](https://github.com/AgentAtelier/Remich/pull/3) |
+| Phase 1 step 3 — anvil's needs and actions, taken | **done** | [#4](https://github.com/AgentAtelier/Remich/pull/4) |
+| Phase 1 step 4 — the scorer, callable from Godot | **done** | [#5](https://github.com/AgentAtelier/Remich/pull/5) |
+| Phase 1 step 5 — a day in the test project | **done** | [#6](https://github.com/AgentAtelier/Remich/pull/6) |
+| Phase 2 step 1 — one clock | **done** | [#8](https://github.com/AgentAtelier/Remich/pull/8) |
+| Phase 2 step 2 — one weather snapshot | **done** | [#10](https://github.com/AgentAtelier/Remich/pull/10) |
+| Phase 2 step 3 — the game's save | **done** | [#11](https://github.com/AgentAtelier/Remich/pull/11) |
+| Phase 2 step 4 — many inhabitants, measured | **done** | [#12](https://github.com/AgentAtelier/Remich/pull/12) |
+| Phase 3 step 1 — the embedded catalogue (issue #9) | **done** | [#14](https://github.com/AgentAtelier/Remich/pull/14) |
+| The phase 3 plan | **done** | [#13](https://github.com/AgentAtelier/Remich/pull/13) |
+| The phase 3 step 2 re-scope | **done** | [#16](https://github.com/AgentAtelier/Remich/pull/16) |
+
+(The phase 1 plan and the phase 2 plan were merged the same way:
+[#1](https://github.com/AgentAtelier/Remich/pull/1) and
+[#7](https://github.com/AgentAtelier/Remich/pull/7).)
+
+**Not built — one line each, with the plan-B reason: the second round's lanes close so the next
+focus can be the first tiny game for itch.io.**
+
+| Step | State | Evidence |
+|---|---|---|
+| Phase 3 step 2 — soul primitives across the bridge | **not built** | [#17](https://github.com/AgentAtelier/Remich/pull/17) closed unmerged; the branch `phase3/step2-soul-primitives-20261001` is kept for a later round — complete at `e48f5e45`, 46/46 checks on its measured commit `4da6ef4e` |
+| Phase 3 step 3 — skills by doing and by watching | **not built** | no pull request; back to planning |
+| Phase 3 step 4 — catastrophes as signals | **not built** | no pull request; back to planning |
+| Phase 3 step 5 — what `system/npc` needs | **not built** | no pull request; back to planning |
+
+**Lead-owned, not lane work.** Wiring the clock, the weather snapshot, the save and later the soul
+into Larochette; Y-R (Munshausen's optional chooser, Ada using Remich's scorer, and §4's "Done
+when" — the owner watching Ada live a day); and what Eisleck's weather, Munshausen's needs and the
+emotional behaviour anvil never implemented should mean in the game (§4b's lead steps). None of it
+was this lane's work and none of it happened in this round; it returns to the owner's and the lead's
+planning.
+
+**Test debt, as issues.** [#15](https://github.com/AgentAtelier/Remich/issues/15) holds the two
+historical Phase 1 checkers (`tools/check_phase1_step4.sh`, `tools/check_phase1_step5.sh`), already
+red on `main` at `cfabac9` before this record: the plan freeze still pinned to the phase 3 plan
+merge `cfa796cc`, the rebuild sentinel now in two records, and the eight Phase 2 Rust files measured
+against step 4's base. Its comment of 2026-10-01 carries the commands and a named-exception repair.
+Standing ruling 5 keeps that as its own maintenance step, never part of a capability step.
+
+One consequence of **this** record belongs beside it: the chain checkers on `main`
+(`tools/check_phase2_step1.sh` … `tools/check_phase3_step1.sh`, plus `tools/check_phase3_step2.sh`
+on the branch kept with #17) hold `docs/PLAN.md` byte-identical to the re-scope merge
+`02eff4214c97d31743e7486a9d905fa5c22541a6`, and this owner-ordered closing record is the first
+change to the plan since. After this merges those assertions no longer pass until `PLAN_FREEZE` is
+re-pinned to this record's commit — which those checkers' own comments allow, for an authorized
+amendment. The lanes are closed, so no step re-runs them; recorded here rather than dropped, for the
+round that resumes Remich.
+
+**Plan status: closed (2026-10-01).**
 
 ## 0. Why (owner, 2026-09-30)
 
@@ -166,10 +238,13 @@ trees read). All as traces and numbers.
 
 **Steps (the lane), in order:**
 
-1. **The embedded catalogue (issue #9).** As ruled there: the action catalogue compiled into the
+1. **The embedded catalogue (issue #9) — done ([#14](https://github.com/AgentAtelier/Remich/pull/14)).**
+   As ruled there: the action catalogue compiled into the
    library, the donor adaptation recorded, the ratchets updated. *Acceptance:* the library scores
    correctly after its build checkout is moved.
-2. **Soul primitives across the bridge.** anvil's layered soul (`soul/`, `soul.rs`: traits from a
+2. **Soul primitives across the bridge — not built** (#17 closed unmerged; branch
+   `phase3/step2-soul-primitives-20261001` kept for a later round). anvil's layered soul
+   (`soul/`, `soul.rs`: traits from a
    seed, the four emotional axes) callable from Godot: create a `LayeredSoul` from a seed, read the
    substrate and the four axes, and call the donor's `EmotionalAxes::propagate(connection_weight)`
    (and `ConnectionLayer::weight()` where the fixture needs an edge weight). Deterministic. *Donor
@@ -180,16 +255,19 @@ trees read). All as traces and numbers.
    byte-identical trace for three stand-ins, and the bridge is shown to return the donor propagation
    result unchanged; a test-only bypass of the propagation call must change that trace, reported as
    propagated influence, not mood spreading.
-3. **Skills by doing and by watching.** anvil's `skill/` (practice, fluency, profile, perceptibility):
+3. **Skills by doing and by watching — not built (plan B).**
+   anvil's `skill/` (practice, fluency, profile, perceptibility):
    practising raises fluency; an inhabitant who can perceive another practising learns more slowly by
    watching. *Acceptance:* a trace where the doer's fluency rises faster than the watcher's, and a
    watcher who cannot perceive learns nothing; deterministic.
-4. **Catastrophes as signals.** anvil's `catastrophe/` (event, signal, propagation) callable: a seeded
+4. **Catastrophes as signals — not built (plan B).**
+   anvil's `catastrophe/` (event, signal, propagation) callable: a seeded
    event (a storm) propagates its signal; behind a switch it drives the weather snapshot (phase 2
    step 2) instead of the stand-in schedule. "Predictable in kind, unpredictable in timing"
    (Forgeborn) is anvil's, unchanged. *Acceptance:* with the switch on, the wind global follows the
    storm; off, the stand-in schedule as before; deterministic by seed.
-5. **What `system/npc` needs.** The donor's `system/npc` module (its `mod.rs` preserved as
+5. **What `system/npc` needs — not built (plan B).**
+   The donor's `system/npc` module (its `mod.rs` preserved as
    `kimi_npc_mod.rs`, §3) is taken only if steps 2–4 need it, repaired with every change listed.
    Otherwise recorded as not taken.
 
@@ -200,7 +278,9 @@ catastrophe felt, does to the four axes), how propagated influence is incorporat
 soul, how several influences are aggregated and in what order the axes update, and any contextual
 asymmetry of contagion. None of that is Remich's to author.
 
-**Done when:** steps 1–4 (and 5 if needed) are merged with their acceptance and rebuild times posted.
+**Done when (not reached — the lane closed 2026-10-01 with step 1 merged and step 2 closed
+unmerged, #17):** steps 1–4 (and 5 if needed) are merged with their acceptance and rebuild times
+posted.
 
 ## 5. What the monitor reports to the owner
 
