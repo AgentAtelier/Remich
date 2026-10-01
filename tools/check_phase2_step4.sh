@@ -15,17 +15,21 @@
 # Requirements, as checks (numbered as this step enumerated them):
 #
 #   1. the Step 3 merge and its reviewed head are ancestors of this head;
-#   2. tools/check_phase2_step3.sh remains green and unchanged (with every
-#      earlier checker, validator, harness, probe and the plan frozen since
-#      the Step 3 merge, the autoload order intact with SaveProbe last, and
-#      no benchmark marker anywhere in the ordinary runs);
-#   3. donor code/data and provenance remain untouched;
+#   2. tools/check_phase2_step3.sh remains green (with every earlier checker,
+#      validator, harness and probe frozen since the Step 3 merge except their
+#      named Remich #9 / Phase 3 Step 1 edits, docs/PLAN.md frozen at the
+#      lead's Phase 3 plan merge, the autoload order intact with SaveProbe
+#      last, and no benchmark marker anywhere in the ordinary runs);
+#   3. donor code/data and provenance remain untouched, bar the one file
+#      Remich #9 authorizes and the record documenting it;
 #   4. the scorer implementation and formulas are unchanged since Step 3,
 #      the committed bridge revision holds, and the rebuild sentinel
 #      survives only in documentation that records the measurement;
 #   5. no new bulk, batched or parallel scoring API exists — the only files
 #      changed since the Step 3 merge are the benchmark script, its runner,
-#      this checker, its validator and the record;
+#      this checker, its validator, the record, and the files Remich #9 /
+#      Phase 3 Step 1 names (the catalogue, its provenance record, the
+#      checkers whose ratchets it moved and this step's own new files);
 #   6. the benchmark invokes the real RemichScorer through pinned Godot
 #      4.7.2 (behavioural: the smoke run itself);
 #   7. exactly one scorer instance is created, outside all timed work;
@@ -59,7 +63,7 @@
 #      optimisation pass followed it;
 #  26. the measured commit is named, exists, and is an ancestor of HEAD;
 #  27. the final executable tree differs from the measured commit only by
-#      result documentation;
+#      result documentation and the named Remich #9 files;
 #  28. the workspace builds and tests warning-free;
 #  29. no generated benchmark output, build or staging state is tracked;
 #  30. no other repository was modified and external paths stay limited;
@@ -100,6 +104,17 @@ RESULT_VALIDATOR="tools/check_scale_result.py"
 STEP3_CHECKER="tools/check_phase2_step3.sh"
 RECORD_DOC="docs/remich-scale-phase2-step4.md"
 PLAN_DOC="docs/PLAN.md"
+
+# Remich issue #9 / Phase 3 Step 1 (the embedded action catalogue): the one
+# donor file that step is authorized to change, the provenance record that
+# documents it, its own result record, the checkers whose ratchets it
+# legitimately moved, and the lead's Phase 3 plan merge — at which
+# docs/PLAN.md is now frozen, because that merge extended the plan after
+# $STEP3_MERGE.
+N9_CATALOGUE="crates/anvil_sim/src/actions/catalogue.rs"
+N9_PROVENANCE="docs/anvil-import-phase1-step3.md"
+N9_RECORD="docs/remich-catalogue-phase3-step1.md"
+PLAN_MERGE="cfa796cc4885432da93b1974602ef3ba9a7cbff8"
 
 COMMITTED_SCORER_REV="remich-scorer-v1"
 # The rebuild-measurement sentinel, spelled so this script never trips its
@@ -198,6 +213,14 @@ else
     tail_log "$LOG_STEP3"
 fi
 
+# Remich issue #9 / Phase 3 Step 1: the frozen checkers that changed are
+# exactly the ones whose ratchets the authorized catalogue adaptation moved
+# (inventory counts, the donor byte rule, the frozen source-test count and
+# the donor/record/plan freezes), each edited with a comment naming this
+# issue. docs/PLAN.md was extended by the lead's Phase 3 plan merge after
+# the Step 3 merge, so it is frozen byte-for-byte at that merge instead —
+# which still forbids this step from rewriting it. Every other frozen file
+# must match $STEP3_MERGE exactly.
 frozen_delta="$(git diff --name-only "$STEP3_MERGE" -- \
     "$STEP3_CHECKER" tools/check_phase2_step1.sh tools/check_phase2_step2.sh \
     tools/check_phase1_step1.sh tools/check_phase1_step2.sh \
@@ -212,21 +235,38 @@ frozen_delta="$(git diff --name-only "$STEP3_MERGE" -- \
     godot/clock_probe.gd godot/weather_probe.gd godot/day_probe.gd \
     godot/marker.gd godot/world_clock.gd godot/weather.gd \
     godot/project.godot godot/remich.gdextension \
-    "$PLAN_DOC" 2>/dev/null)"
-if [ -z "$frozen_delta" ]; then
-    pass "every earlier checker, validator, harness, probe and the plan are unchanged since the Step 3 merge"
+    2>/dev/null \
+    | grep -vxF -e "$STEP3_CHECKER" -e tools/check_phase2_step1.sh \
+        -e tools/check_phase2_step2.sh -e tools/check_phase1_step3.sh \
+        -e tools/check_phase1_step4.sh -e tools/check_phase1_step5.sh || true)"
+plan_delta=""
+if ! git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
+    plan_delta="$PLAN_DOC"
+fi
+combined="$(printf '%s\n%s\n' "$frozen_delta" "$plan_delta" | sed '/^$/d')"
+if [ -z "$combined" ]; then
+    pass "every earlier checker, validator, harness and probe differs only by its named Remich #9 edit, and docs/PLAN.md matches the plan merge"
 else
-    fail "a frozen checker, harness, probe or the plan changed since the Step 3 merge:"
-    printf '%s\n' "$frozen_delta" | sed 's/^/      | /'
+    fail "a frozen checker, harness, probe or the plan changed beyond the Remich #9 authorization:"
+    printf '%s\n' "$combined" | sed 's/^/      | /'
 fi
 
+# docs/PLAN.md (lead's Phase 3 plan merge) plus the two records Remich #9
+# requires: the provenance record it amends, and this step's own result
+# record. Nothing else under docs/ may differ from the Step 3 merge.
 doc_delta="$(git diff --name-only "$STEP3_MERGE" -- 'docs/*.md' 2>/dev/null \
-    | grep -v "^${RECORD_DOC}\$" || true)"
+    | grep -vxF -e "$RECORD_DOC" -e "$N9_PROVENANCE" -e "$N9_RECORD" \
+        -e docs/PLAN.md || true)"
 if [ -z "$doc_delta" ]; then
-    pass "no record other than this step's own exists changed since the Step 3 merge"
+    pass "no record other than this step's own, the Remich #9 provenance update and the lead's plan merge exists changed since the Step 3 merge"
 else
     fail "an earlier record changed since the Step 3 merge:"
     printf '%s\n' "$doc_delta" | sed 's/^/      | /'
+fi
+if git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
+    pass "docs/PLAN.md is byte-identical to the lead's Phase 3 plan merge $PLAN_MERGE"
+else
+    fail "docs/PLAN.md was rewritten since the Phase 3 plan merge $PLAN_MERGE"
 fi
 
 autoload_order="$(grep -E '^(Marker|ScorerProbe|WorldClock|Weather|DayProbe|ClockProbe|BridgeProbe|WeatherProbe|SaveProbe)=' \
@@ -264,16 +304,26 @@ else
 fi
 
 # -------------------------------------- 3. donor code/data and provenance
-header "3. Donor code/data and provenance remain untouched"
+header "3. Donor code/data and provenance remain untouched, bar the authorized Remich #9 entry"
 
+# Remich issue #9 / Phase 3 Step 1: two named exceptions — the authorized
+# catalogue embedding, and the provenance record that documents it (guarded
+# by the Step 3 sub-check). docs/PLAN.md is frozen byte-for-byte at the
+# lead's Phase 3 plan merge.
 donor_delta="$(git diff --name-only "$STEP3_MERGE" -- \
     crates/anvil_sim crates/anvil_core assets docs/anvil-import-phase1-step3.md \
-    "$PLAN_DOC" 2>/dev/null)"
-if [ -z "$donor_delta" ]; then
-    pass "donor crates, data, the provenance record and the plan are unchanged since the Step 3 merge"
+    2>/dev/null \
+    | grep -vxF -e "$N9_CATALOGUE" -e "$N9_PROVENANCE" || true)"
+plan_delta=""
+if ! git diff --quiet "$PLAN_MERGE" -- "$PLAN_DOC" 2>/dev/null; then
+    plan_delta="$PLAN_DOC"
+fi
+combined="$(printf '%s\n%s\n' "$donor_delta" "$plan_delta" | sed '/^$/d')"
+if [ -z "$combined" ]; then
+    pass "donor crates and data are unchanged but for the authorized $N9_CATALOGUE, the provenance record documents it, and the plan matches the plan merge"
 else
-    fail "donor code/data, provenance or the plan changed since the Step 3 merge:"
-    printf '%s\n' "$donor_delta" | sed 's/^/      | /'
+    fail "donor code/data, provenance or the plan changed beyond the Remich #9 authorization:"
+    printf '%s\n' "$combined" | sed 's/^/      | /'
 fi
 
 vault_head="$(git -C "$VAULT" rev-parse HEAD 2>/dev/null || echo missing)"
@@ -300,11 +350,16 @@ fi
 # ------------------------- 4. scorer implementation unchanged; v1 restored
 header "4. The scorer implementation and formulas are unchanged since Step 3"
 
-rust_delta="$(git diff --name-only "$STEP3_MERGE" -- crates/ 2>/dev/null)"
+# Remich issue #9 / Phase 3 Step 1: the authorized catalogue embedding is the
+# only Rust file this ratchet allows to differ, and it changes how the
+# catalogue reaches the scorer, never the scorer — the committed bridge
+# revision, the formulas and the smoke run below still pin the behaviour.
+rust_delta="$(git diff --name-only "$STEP3_MERGE" -- crates/ 2>/dev/null \
+    | grep -vxF "$N9_CATALOGUE" || true)"
 if [ -z "$rust_delta" ]; then
-    pass "no Rust source changed — anvil_sim, anvil_core, the scorer core, the binding, the save, the weather and the clock are all exactly as merged"
+    pass "no Rust source changed but for the authorized $N9_CATALOGUE — the scorer core, the binding, the save, the weather and the clock are exactly as merged"
 else
-    fail "Rust source changed since the Step 3 merge (the benchmark needs no code change):"
+    fail "Rust source changed since the Step 3 merge beyond the Remich #9 catalogue embedding:"
     printf '%s\n' "$rust_delta" | sed 's/^/      | /'
 fi
 
@@ -354,12 +409,21 @@ while IFS= read -r file; do
         godot/scale_benchmark.gd | tools/benchmark_phase2_step4.sh \
             | tools/check_phase2_step4.sh | tools/check_scale_result.py \
             | docs/remich-scale-phase2-step4.md) ;;
+        # Remich issue #9 / Phase 3 Step 1: the authorized catalogue
+        # embedding, the provenance record documenting it, this step's own
+        # record, the lead's Phase 3 plan merge, the checkers whose ratchets
+        # the adaptation moved, and the two scripts this step adds.
+        "$N9_CATALOGUE" | "$N9_PROVENANCE" | "$N9_RECORD" | docs/PLAN.md \
+            | tools/check_phase1_step3.sh | tools/check_phase1_step4.sh \
+            | tools/check_phase1_step5.sh | tools/check_phase2_step1.sh \
+            | tools/check_phase2_step2.sh | tools/check_phase2_step3.sh \
+            | tools/check_phase3_step1.sh | tools/check_catalogue_relocation.sh) ;;
         *) allowed="$allowed$file
 " ;;
     esac
 done <<<"$delta"
 if [ -z "$allowed" ]; then
-    pass "the only files changed since the Step 3 merge are the benchmark script, its runner, this checker, its validator and the record"
+    pass "the only files changed since the Step 3 merge are the benchmark's own files and the files Remich #9 / Phase 3 Step 1 names"
 else
     fail "files outside this step's benchmark-only scope changed:"
     printf '%s' "$allowed" | sed 's/^/      | /'
@@ -817,17 +881,27 @@ else
         [ -z "$file" ] && continue
         case "$file" in
             docs/*.md) ;;
+            # Remich issue #9 / Phase 3 Step 1: the authorized catalogue
+            # embedding, the checkers whose ratchets it moved (this one
+            # included), and the two scripts it adds. Nothing else may reach
+            # the final head.
+            "$N9_CATALOGUE" | tools/check_phase2_step4.sh \
+                | tools/check_phase1_step3.sh \
+                | tools/check_phase1_step4.sh | tools/check_phase1_step5.sh \
+                | tools/check_phase2_step1.sh | tools/check_phase2_step2.sh \
+                | tools/check_phase2_step3.sh | tools/check_phase3_step1.sh \
+                | tools/check_catalogue_relocation.sh) ;;
             *) non_doc="$non_doc      | $file
 " ;;
         esac
     done <<<"$final_delta"
     if [ -n "$non_doc" ]; then
-        fail "the measured -> final diff contains non-documentation files:"
+        fail "the measured -> final diff contains files beyond documentation and the named Remich #9 set:"
         printf '%s' "$non_doc"
     elif [ -z "$final_delta" ]; then
         fail "the final head does not differ from the measured commit by the record"
     else
-        pass "measured -> final differs by documentation only:"
+        pass "measured -> final differs by documentation only, plus the named Remich #9 files:"
         printf '%s\n' "$final_delta" | sed 's/^/      | /'
     fi
 fi

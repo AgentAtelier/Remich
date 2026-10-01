@@ -45,10 +45,13 @@ ANVIL_MAIN="97c8fdbd7ff85779f33456fd7c444657f8d90b36"
 PROVENANCE_FORM="buggy-vault@24181142 repos/anvil/source/<path>"
 DATA_SHA="166104ba90e30446adfb8d15ec6e242a52567c979bccb274a7011296b163dba5"
 SENTINEL="remich-timing-probe"
-# Every `#[test]` in the two donor crates: 181 unit (anvil_sim 131 +
+# Every `#[test]` in the two donor crates: 182 unit (anvil_sim 132 +
 # anvil_core 50) + 2 carried integration tests. Frozen for this step so that
 # deleting tests from the source cannot pass by matching a lowered count.
-EXPECTED_SOURCE_TESTS=183
+# 183 was the count at the import; Remich issue #9 / Phase 3 Step 1 added
+# exactly one catalogue test (`embedded_catalogue_is_the_committed_file`),
+# which moved this ratchet to 184 — no other test was added or removed.
+EXPECTED_SOURCE_TESTS=184
 BRIDGE_PROBE_SOURCE="crates/remich_gdext/src/lib.rs"
 COMMITTED_BRIDGE_VALUE="remich-bridge-v1"
 TAKEN_DIRS=(crates/anvil_sim crates/anvil_core assets)
@@ -243,11 +246,14 @@ if [ -s "$LOG_DIR/inventory.tsv" ]; then
         pass "every inventoried destination exists and is tracked"
     fi
 
-    # Frozen inventory shape for this step: 34 entries = 27 unchanged + 4
-    # adapted + 1 new + 1 excerpt + 1 data (docs/anvil-import §4 "Counts").
+    # Frozen inventory shape: 34 entries = 26 unchanged + 5 adapted + 1 new
+    # + 1 excerpt + 1 data (docs/anvil-import §4 "Counts"). It was 27
+    # unchanged + 4 adapted until Remich issue #9 / Phase 3 Step 1 moved
+    # crates/anvil_sim/src/actions/catalogue.rs from `unchanged` to
+    # `adapted`; no entry was added, removed or otherwise reclassified.
     counts="$(cut -f3 "$LOG_DIR/inventory.tsv" | sort | uniq -c \
         | awk '{ printf "%s=%s ", $2, $1 }')"
-    expected_counts="adapted=4 data=1 excerpt=1 new=1 unchanged=27 "
+    expected_counts="adapted=5 data=1 excerpt=1 new=1 unchanged=26 "
     if [ "$counts" = "$expected_counts" ]; then
         pass "inventory status counts match the recorded 34 entries: $counts"
     else
@@ -362,16 +368,83 @@ if [ -s "$LOG_DIR/inventory.tsv" ]; then
             unchanged_bad=$((unchanged_bad + 1))
         fi
     done <"$LOG_DIR/inventory.tsv"
-    if [ "$unchanged_ok" -eq 27 ] && [ "$unchanged_bad" -eq 0 ]; then
-        pass "all 27 unchanged entries are byte-identical to the vault (sha256 vs git show $VAULT_COMMIT)"
+    if [ "$unchanged_ok" -eq 26 ] && [ "$unchanged_bad" -eq 0 ]; then
+        pass "all 26 unchanged entries are byte-identical to the vault (sha256 vs git show $VAULT_COMMIT)"
     fi
 
     # An adapted .rs file must be the donor file minus whole lines only —
     # a pure deletion, as §5 claims. (The two adapted Cargo.toml files have
     # documented line edits and are covered by the §5 listing check below.)
+    #
+    # Remich issue #9 / Phase 3 Step 1 names exactly one exception to this
+    # rule, because the authorized catalogue embedding is not and cannot be a
+    # line deletion: it replaces a runtime file read with compile-time
+    # embedded text. Verification is not skipped for that file — it is proved
+    # narrow instead, by the assertions in the branch below (canonical donor
+    # provenance, still listed as adapted, the embedded loader and its
+    # serde_json::from_str parse, no repo_path!/filesystem use in the non-test
+    # code, the qualified asset sha256, and the §5 documentation). Every other
+    # adapted .rs file keeps the pure-deletion rule unchanged.
+    N9_CATALOGUE="crates/anvil_sim/src/actions/catalogue.rs"
     while IFS=$'\t' read -r p prov st; do
         [ "$st" = "adapted" ] || continue
         [[ "$p" == *.rs ]] || continue
+        if [ "$p" = "$N9_CATALOGUE" ]; then
+            # The loop filter above is what makes this the adapted entry;
+            # say so, so the exception's own evidence is in the log.
+            pass "$p is inventoried as adapted (Remich #9 / Phase 3 Step 1)"
+
+            expected_prov="buggy-vault@24181142 repos/anvil/source/$N9_CATALOGUE"
+            if [ "$prov" = "$expected_prov" ]; then
+                pass "$p keeps its canonical donor provenance: $prov"
+            else
+                fail "$p provenance is '$prov', expected '$expected_prov'"
+            fi
+
+            # The code the library actually runs: everything before the test
+            # module, with // comments stripped so prose cannot satisfy a
+            # source assertion.
+            sed -n '1,/^#\[cfg(test)\]/p' "$p" | sed 's|//.*$||' \
+                >"$LOG_DIR/catalogue-runtime.rs"
+
+            if grep -qF 'include_str!' "$LOG_DIR/catalogue-runtime.rs" \
+                    && grep -qF 'env!("CARGO_MANIFEST_DIR")' "$LOG_DIR/catalogue-runtime.rs" \
+                    && grep -qF '"/../../assets/sim/actions.json"' "$LOG_DIR/catalogue-runtime.rs"; then
+                pass "$p embeds the committed catalogue at compile time (include_str! of assets/sim/actions.json)"
+            else
+                fail "$p does not embed assets/sim/actions.json at compile time"
+            fi
+
+            if grep -qF 'serde_json::from_str' "$LOG_DIR/catalogue-runtime.rs"; then
+                pass "$p parses the embedded catalogue with serde_json::from_str"
+            else
+                fail "$p does not parse the embedded catalogue with serde_json::from_str"
+            fi
+
+            runtime_touched="$(grep -nE 'repo_path|std::fs|fs::read|File::open' \
+                "$LOG_DIR/catalogue-runtime.rs" || true)"
+            if [ -z "$runtime_touched" ]; then
+                pass "$p's non-test code uses neither repo_path! nor any filesystem read"
+            else
+                fail "$p's non-test code still reaches the build checkout:"
+                printf '%s\n' "$runtime_touched" | sed 's/^/      | /'
+            fi
+
+            n9_data_sha="$(sha256sum assets/sim/actions.json 2>/dev/null | cut -d' ' -f1)"
+            if [ "$n9_data_sha" = "$DATA_SHA" ]; then
+                pass "assets/sim/actions.json is still the qualified $DATA_SHA"
+            else
+                fail "assets/sim/actions.json sha256 is '$n9_data_sha', expected $DATA_SHA"
+            fi
+
+            if grep -qF 'Remich issue #9 / Phase 3 Step 1' "$PROVENANCE_DOC" \
+                    && grep -qF 'Post-import adaptation' "$PROVENANCE_DOC"; then
+                pass "the adaptation is documented as a dated post-import change in $PROVENANCE_DOC"
+            else
+                fail "$PROVENANCE_DOC does not document the post-import Remich #9 adaptation"
+            fi
+            continue
+        fi
         donor_path="${prov#buggy-vault@24181142 }"
         if git -C "$VAULT" show "$VAULT_COMMIT:$donor_path" 2>/dev/null | awk '
             NR == FNR { donor[FNR] = $0; dn = FNR; next }

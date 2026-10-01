@@ -63,7 +63,7 @@ explicitly (§`refs/heads/main (default)`).
 | narrow dependency: soul types | `crates/anvil_sim/src/soul.rs`, `crates/anvil_sim/src/soul/axes.rs` (`EmotionalState`, `Substrate` are scoring parameters; `EmotionalState` embeds `EmotionalAxes`) |
 | narrow dependency: skill enums | `crates/anvil_sim/src/settlement/skill.rs` (`Skill` is scoring's skill-modifier parameter), `crates/anvil_sim/src/skill/affordance.rs` (`AffordanceId` is an `Action` field), `crates/anvil_sim/src/skill/domain.rs` (`SkillDomain` is `time.rs`'s parameter) |
 | module roots for the two narrow skills | `crates/anvil_sim/src/settlement/mod.rs`, `crates/anvil_sim/src/skill/mod.rs` (pruned — §5) |
-| `anvil_core` (whole crate) | `ValidationErrors`, `FailureClass`, `error_buffer!`/`push_validation_error!` (every validator in the subset), `repo_path!` (the catalogue path), plus the crate's module tree; the crate is serde/thiserror-only, has no engine or excluded-subsystem content, and taking it whole avoids editing donor `lib.rs` at all |
+| `anvil_core` (whole crate) | `ValidationErrors`, `FailureClass`, `error_buffer!`/`push_validation_error!` (every validator in the subset), `repo_path!` (the catalogue path as taken; since Remich #9 / Phase 3 Step 1 the catalogue embeds that file and no longer calls it — §5.10), plus the crate's module tree; the crate is serde/thiserror-only, has no engine or excluded-subsystem content, and taking it whole avoids editing donor `lib.rs` at all |
 
 Dependency closure was derived from the source (`use` lines of the taken files),
 not assumed: nothing in the taken subset references `glam`, `tracing`,
@@ -88,7 +88,7 @@ crates/anvil_core/src/asset_request.rs :: buggy-vault@24181142 repos/anvil/sourc
 crates/anvil_core/src/connections.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_core/src/connections.rs :: unchanged :: module tree required by anvil_core lib.rs
 crates/anvil_core/src/error.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_core/src/error.rs :: unchanged :: ValidationErrors, FailureClass, error_buffer!/push_validation_error! used by every validator in the subset
 crates/anvil_core/src/ids.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_core/src/ids.rs :: unchanged :: module tree required by anvil_core lib.rs
-crates/anvil_core/src/path.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_core/src/path.rs :: unchanged :: repo_path! macro used by actions/catalogue.rs to find assets/sim/actions.json
+crates/anvil_core/src/path.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_core/src/path.rs :: unchanged :: repo_path! macro, taken for the catalogue path; since Remich #9 (§5.10) the catalogue embeds assets/sim/actions.json instead and no longer calls it
 crates/anvil_core/src/semantic.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_core/src/semantic.rs :: unchanged :: module tree required by anvil_core lib.rs
 crates/anvil_core/src/world/mod.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_core/src/world/mod.rs :: unchanged :: module tree required by anvil_core lib.rs
 crates/anvil_core/src/world/damage.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_core/src/world/damage.rs :: unchanged :: module tree required by anvil_core lib.rs
@@ -101,7 +101,7 @@ crates/anvil_sim/Cargo.toml :: buggy-vault@24181142 repos/anvil/source/crates/an
 crates/anvil_sim/src/lib.rs :: new file — Remich-authored crate root; carries verbatim excerpts of buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/lib.rs (lines 76-127 DeterministicRng, lines 373-392 its two tests) :: new :: module wiring for the subset; DeterministicRng is required by soul.rs non-test code
 crates/anvil_sim/src/needs.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/needs.rs :: unchanged :: the needs component
 crates/anvil_sim/src/actions.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/actions.rs :: unchanged :: the actions/activities component (Action, TimeBlock, CopingType, ResourcePool/Effect)
-crates/anvil_sim/src/actions/catalogue.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/actions/catalogue.rs :: unchanged :: the action catalogue the scorer iterates; loads assets/sim/actions.json
+crates/anvil_sim/src/actions/catalogue.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/actions/catalogue.rs :: adapted :: the action catalogue the scorer iterates; embeds assets/sim/actions.json at compile time (Remich #9 / Phase 3 Step 1, §5.10) — status moved from unchanged on 2026-10-01, provenance unchanged
 crates/anvil_sim/src/utility/mod.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/utility/mod.rs :: unchanged :: module root of the utility component
 crates/anvil_sim/src/utility/scoring.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/utility/scoring.rs :: unchanged :: the utility scorer itself
 crates/anvil_sim/src/time.rs :: buggy-vault@24181142 repos/anvil/source/crates/anvil_sim/src/time.rs :: unchanged :: the time-of-day curves
@@ -117,9 +117,16 @@ crates/anvil_sim/tests/npc_determinism_carried.rs :: new file carrying a byte-id
 assets/sim/actions.json :: anvil-bundle@97c8fdbd assets/sim/actions.json :: data :: runtime action-catalogue data loaded by actions/catalogue.rs; lead-authorized provenance exception (§2.1)
 <!-- step3-inventory:end -->
 
-Counts: 31 donor files copied byte-exactly from `24181142…` (27 unchanged `.rs`
-files, 2 adapted `.rs` module roots, 2 adapted `Cargo.toml` files) + 2 new
-Remich-authored `.rs` files + 1 data file = 34 entries.
+Counts: 34 entries = **26 unchanged** files byte-identical to `24181142…`
+(26 `.rs`), + **5 adapted** (2 adapted `.rs` module roots, 2 adapted
+`Cargo.toml` files, and `crates/anvil_sim/src/actions/catalogue.rs`) + **1
+new** Remich-authored `.rs` file + **1 excerpt** file + **1 data** file.
+
+At the original import this record read 27 unchanged + 4 adapted; the one
+status change since is `crates/anvil_sim/src/actions/catalogue.rs`,
+`unchanged` → `adapted`, made on 2026-10-01 under Remich issue #9 / Phase 3
+Step 1 (§5.10). Its provenance line is untouched, no file was added or
+removed, and no other entry's status moved.
 
 ## 5. Every adaptation made after copying
 
@@ -191,11 +198,39 @@ changes, each change listed").
    upstream fetch; and the `kimi_npc_mod.rs` note updated to reflect what
    Step 3 actually did (§7).
 
-No other post-copy change was made. In particular: no formula was tuned, no
+10. **Post-import adaptation (2026-10-01) — `crates/anvil_sim/src/actions/catalogue.rs`,
+   authorized by Remich issue #9 / Phase 3 Step 1.** This item was **not** part
+   of the Phase 1 Step 3 import; it is recorded here because this document is
+   the inventory of record for that file. The imported file loaded
+   `assets/sim/actions.json` at run time through `repo_path!`, which resolves
+   from `CARGO_MANIFEST_DIR` **at compile time**, so the built
+   `libremich_gdext.so` kept reading its catalogue from the checkout it was
+   built in — observed when Y-R built Remich in a temporary checkout, deleted
+   it, and the first `score_activity` in Larochette panicked with
+   `Failed to load actions catalogue: IoError(NotFound)`. The lead ruled this
+   one donor adaptation allowed (standing-ruling-2 spirit, recorded in issue
+   #9): the committed catalogue is now embedded at compile time with
+   `include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+   "/../../assets/sim/actions.json"))` and parsed with
+   `serde_json::from_str`. **Exactly what changed:** the delivery of the bytes
+   — the runtime loader no longer invokes `repo_path!`, opens a file, calls
+   `std::fs::read` or otherwise touches the build checkout. **Exactly what did
+   not:** the catalogue data (`assets/sim/actions.json` is byte-identical,
+   sha256 `166104ba90e30446adfb8d15ec6e242a52567c979bccb274a7011296b163dba5`,
+   26 actions), the `Action` values and their order, the public functions, the
+   `OnceLock` behaviour, and the `ActionCatalogueError` type — the error API
+   was deliberately not redesigned for an I/O-less loader. One test was added
+   (`embedded_catalogue_is_the_committed_file`, test-only file comparison),
+   which is why the frozen donor source-test count moved 183 → 184 (§6). The
+   file's status moved `unchanged` → `adapted`; its provenance line did not.
+
+No other post-copy change was made during the import: items 1-9 are the whole
+of the Phase 1 Step 3 adaptation list, and for them no formula was tuned, no
 concept renamed, no algorithm simplified, no donor API reshaped for the Godot
 bridge (that is Step 4), no visibility changed, no warning or style cleanup, and
 no engine-facing code had to be removed — the donor sim code was already
-engine-free.
+engine-free. Item 10 is the single later, dated, lead-authorized adaptation
+described above.
 
 ## 6. Donor tests: what runs, what was not carried (and exactly why)
 
@@ -206,7 +241,7 @@ Command: `cargo test -p anvil_core -p anvil_sim` (and via
 
 | Test target | Result |
 |---|---|
-| `anvil_sim` unit tests (inline in the copied sources + the 2 carried RNG tests) | **131 passed, 0 failed, 0 ignored** |
+| `anvil_sim` unit tests (inline in the copied sources + the 2 carried RNG tests) | **132 passed, 0 failed, 0 ignored** (131 at the import + the post-import Remich #9 test, §5.10) |
 | `anvil_sim` integration `tests/npc_determinism_carried.rs` (carried excerpt) | **2 passed, 0 failed** |
 | `anvil_core` unit tests (inline in the copied sources) | **50 passed, 0 failed, 0 ignored** |
 | `anvil_core` doc-tests | 3 passed, 1 ignored, in the two batches rustdoc emits: `2 passed; 0 failed; 1 ignored` (the ignore is the donor's own ` ```ignore ` example in `error.rs`, copied byte-identically — not ours), then `1 passed; 0 failed; 0 ignored` (the donor's compile-fail doctest in `ids.rs`) |
@@ -216,12 +251,18 @@ Per-file unit-test counts (mechanically cross-checked by
 `tools/check_phase1_step3.sh` against `#[test]` occurrences in the tracked
 sources — executed count must equal source count):
 
-`needs.rs` 5 · `actions.rs` 12 · `actions/catalogue.rs` 9 ·
+`needs.rs` 5 · `actions.rs` 12 · `actions/catalogue.rs` 10 (9 at the import +
+the Remich #9 test, §5.10) ·
 `utility/scoring.rs` 17 · `time.rs` 9 · `age.rs` 17 · `soul.rs` 23 ·
 `soul/axes.rs` 24 · `settlement/skill.rs` 1 · `skill/affordance.rs` 9 ·
-`skill/domain.rs` 3 · `anvil_sim/src/lib.rs` (carried RNG tests) 2 → **131** ·
+`skill/domain.rs` 3 · `anvil_sim/src/lib.rs` (carried RNG tests) 2 → **132** ·
 `anvil_core`: `lib.rs` 5 · `asset_request.rs` 12 · `connections.rs` 16 ·
 `error.rs` 8 · `semantic.rs` 9 → **50**.
+
+So the source `#[test]` count of the two donor crates is **184** since
+2026-10-01 (132 + 50 + 2 carried integration), against the 183 this step
+recorded at the import; `tools/check_phase1_step3.sh` freezes 184 because
+Remich #9 added exactly one catalogue test and no other.
 
 These cover every copied component: needs, actions + catalogue (including the
 real `actions.json` load and every catalogue-content assertion), utility
