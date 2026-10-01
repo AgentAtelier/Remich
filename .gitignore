@@ -11,6 +11,11 @@
 /godot/bridge_probe_expectation.txt
 /godot/scorer_probe_expectation.txt
 
+# The step-5 day harness's runtime trace (REMICH_DAY_TRACE_PATH). Generated
+# state, never committed: the acceptance writes these under /tmp, and this
+# pattern covers one pointed inside the working tree by hand.
+day_trace*.jsonl
+
 # The GDExtension binary itself: target/ already covers it, but say so twice
 # because a stray copy next to the project would be loadable and therefore
 # dangerously easy to mistake for a fresh build.
