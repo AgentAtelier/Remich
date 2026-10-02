@@ -202,7 +202,42 @@ byte-for-byte identical to the base, and `tools/check_phase2_step2.sh` is not
 modified. The stand-in mode is still fixture behaviour, and its own acceptance
 still proves it.
 
-## 7. Bite checks (sabotage, reverted)
+## 7. What this change does to the closed acceptance chain
+
+`bash tools/check_phase3_step1.sh` (the top of the chain) is **already red on
+`main` at the base SHA**, before this change: 3 failures from a stale
+`PLAN_FREEZE` (the lane's closing record moved `docs/PLAN.md` after the chain
+checkers froze it) and a dirty `Grengewald` worktree. At this head it is 4
+failures. The one added failure is a **file-scope ratchet, not a behaviour
+regression**:
+
+```
+FAIL  the files changed under crates/, assets/ and godot/ are:
+      | crates/anvil_sim/src/actions/catalogue.rs
+      | crates/remich_core/src/weather.rs
+      | crates/remich_gdext/src/lib.rs
+      | crates/remich_gdext/src/save.rs
+```
+
+That check asserts that *only* the Remich #9 catalogue file differs under
+`crates/`, `assets/` and `godot/` since the phase-3 plan merge. It is a
+per-step scope ratchet from a closed step, and this seam necessarily changes
+`crates/`. Two ratchets in the Step 4 sub-check fail for the same reason
+(`Rust source changed since the Step 3 merge beyond the Remich #9 catalogue
+embedding`, and `files outside this step's benchmark-only scope changed`).
+
+They are **not** amended here. Every weather-specific check in the chain still
+behaves exactly as before: `tools/check_phase2_step2.sh` records the same
+8 failures as the base SHA, byte for byte, and its stand-in weather run still
+succeeds (`REMICH_WEATHER_OK seed=70021 ticks=240
+writer=stand-in-weather-schedule calm=0.000000 windy=0.700000
+rev=remich-weather-v1`). Per standing ruling 5 in the lane's closing record,
+repairing a closed step's scope ratchet is its own maintenance step, tracked on
+[#15](https://github.com/AgentAtelier/Remich/issues/15) — not part of a
+capability change. This seam is reported to #19 with that boundary stated, not
+silently accommodated.
+
+## 8. Bite checks (sabotage, reverted)
 
 Two deliberate weakenings were introduced, the acceptance was re-run against
 each, and both were fully reverted afterwards (`git status` clean):
@@ -221,7 +256,7 @@ the publish path stops enforcing ownership. The checker also greps the seam's
 own body for a stray `claim_writer`, so a pre-claim cannot be slipped back in
 as a bypass.
 
-## 8. Not in this change
+## 9. Not in this change
 
 Weather generation, climate, scheduling, cloud policy, weather transitions,
 random weather, player weather controls, per-field gameplay setters, a second
@@ -230,7 +265,7 @@ any dependency on Eisleck. Issue #19 is **not** closed by this: it is resolved
 only once the merged seam has been used successfully for the stopped Eisleck
 Step-3 end-to-end one-channel acceptance.
 
-## 9. A note on the id's spelling
+## 10. A note on the id's spelling
 
 `eislek-weather-driver` is spelled exactly as issue #19 spells it (with `k`).
 The repository and the external driver are `Eisleck` (with `c`). This seam
