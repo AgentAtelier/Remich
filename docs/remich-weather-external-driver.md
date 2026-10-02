@@ -275,7 +275,8 @@ each, and all were fully reverted afterwards (`git status` clean):
 |---|---|
 | rename `EXTERNAL_DRIVER_ID` in the core | `the_production_writer_id_is_one_fixed_constant` (Rust) and the engine probe: `reason=wrong-writer … claimed 'saboteur-weather', expected 'eislek-weather-driver'`, exit 1 |
 | remove the ownership check from `WeatherChannel::publish` | four core tests, two binding tests, and — after it was found missing — the engine probe: `reason=takeover-accepted`, exit 1 |
-| restore the fabricated flat-W external apply (cycle `0`) | the engine probe: `reason=apply-accepted … it must refuse rather than fabricate a presentation phase`, exit 1, and the binding test `the_external_seam_declares_no_presentation_cycle_and_fabricates_no_phase` |
+| restore the fabricated flat-W external apply (cycle `0`) | the engine probe: `reason=apply-accepted … it must refuse rather than fabricate a presentation phase (applied: [… 0.0])`, exit 1, and the binding test `the_external_seam_declares_no_presentation_cycle_and_fabricates_no_phase` |
+| restore the old `int(writer_id) != 0 and str(writer_id) != …` assertion, with `writer_id()` returning a drifting identity | with the **old** form the probe reported `OK writer=eislek-weather-driver-drift` — the wrong writer id passed. With the **new** direct form the same defect fails immediately: `reason=channel-writer … 'eislek-weather-driver-drift', expected 'eislek-weather-driver'`, exit 1 |
 
 The second one is why the probe now carries the takeover case. The first
 engine run of that sabotage still reported `REMICH_EXTERNAL_WEATHER_OK`: the
@@ -285,6 +286,14 @@ production publish against a stand-in-owned node, and it now fails loudly when
 the publish path stops enforcing ownership. The checker also greps the seam's
 own body for a stray `claim_writer`, so a pre-claim cannot be slipped back in
 as a bypass.
+
+The last one is why the writer-identity assertion is a direct string
+comparison. The old form was
+`int(writer_id) != 0 and str(writer_id) != EXTERNAL_WRITER`: for any
+non-numeric writer id the `int(...)` half is `0`, the condition short-circuits
+to false, and the assertion is skipped entirely — so the probe reported `OK`
+while printing a writer id it had never actually checked. A non-numeric
+identity was unfalsifiable at that line.
 
 ## 9. Not in this change
 

@@ -287,8 +287,7 @@ func _run() -> void:
 	# static, and borrowing the fixture's 240-tick cycle would invent one.
 	var applied: Dictionary = created.call("apply_wind")
 	if bool(applied.get("ok", false)):
-		_fail("apply-accepted", "apply_wind() succeeded in external mode; it must refuse rather \
-			than fabricate a presentation phase (applied: %s)" % str(applied.get("applied", [])))
+		_fail("apply-accepted", "apply_wind() succeeded in external mode; it must refuse rather than fabricate a presentation phase (applied: %s)" % str(applied.get("applied", [])))
 		return
 	if str(applied.get("code", "")) != NO_PHASE_CODE:
 		_fail("apply-code", "apply_wind() failed with '%s', expected '%s'" % [
@@ -299,15 +298,13 @@ func _run() -> void:
 	var apply_reason := str(applied.get("error", ""))
 	if not apply_reason.contains("valid and present") \
 			or not apply_reason.contains("presentation phase"):
-		_fail("apply-reason", "the refusal does not separate the valid weather from the \
-			unowned presentation phase: " + apply_reason)
+		_fail("apply-reason", "the refusal does not separate the valid weather from the unowned presentation phase: " + apply_reason)
 		return
 	# A refused apply must write nothing at all: no recorded vector, so no
 	# fabricated W is left behind in the global either.
 	var fabricated: Array = created.call("last_applied_wind")
 	if fabricated.size() != 0:
-		_fail("apply-fabricated", "a refused apply_wind() still recorded a wind vector: %s" % [
-			str(fabricated)])
+		_fail("apply-fabricated", "a refused apply_wind() still recorded a wind vector: %s" % str(fabricated))
 		return
 	# The weather itself is untouched by the refusal: still valid, still present,
 	# still exactly the seven published values and the exact tick.
@@ -449,8 +446,7 @@ func _run() -> void:
 	]
 	for index in 3:
 		if absf(float(fixture_vector[index]) - fixture_components[index]) > VECTOR_TOLERANCE:
-			_fail("stand-in-wind-component", "the stand-in's applied component %d is %s, its \
-				snapshot says %s" % [index, str(fixture_vector[index]), str(fixture_components[index])])
+			_fail("stand-in-wind-component", "the stand-in's applied component %d is %s, its snapshot says %s" % [index, str(fixture_vector[index]), str(fixture_components[index])])
 			return
 	# One tick further and the phase moves: it is derived from the integer tick,
 	# never held still.
