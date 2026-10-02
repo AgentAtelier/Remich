@@ -70,6 +70,12 @@ It is a `const`, never a parameter. No gameplay caller can choose a production
 writer identity, and the spelling is fixed in one place, asserted in the core
 tests, in the binding tests, and from the engine.
 
+These are the two **named** identities Remich's own built-in paths use. The
+channel API itself stays generic: `WeatherChannel::claim_writer(id)` accepts any
+non-empty identity, which is how the conflict probes and tests observe a second
+writer being refused. What fixes the *production* identity is this binding
+path, which claims it from the constant — not a two-id whitelist in the core.
+
 ## 3. The one production publish operation
 
 ```gdscript
@@ -104,6 +110,7 @@ probe asserts each of those names is absent from the class.
 | the node is not initialized | `not-initialized` |
 | a second initialization, either mode | `already-initialized` |
 | a stand-in-only call in external mode (`drive`, `restore_save_state`) | `no-stand-in-driver` |
+| `apply_wind()` in external mode — no presentation phase is owned here | `no-presentation-phase` |
 | a non-finite value, or a negative strength | `invalid-snapshot` |
 | a distinct second writer claiming or publishing | `writer-conflict` (names `held_by` and `attempted`) |
 | a negative tick | `bad-input` |
@@ -129,20 +136,37 @@ Unchanged, and reading the same one channel: `snapshot()`, `writer_id()`,
 `writer_status()`, `apply_wind()`, `last_applied_wind()`.
 
 `apply_wind()` — the one live write of the `grengewald_wind` shader global —
-now works in both modes. It reads the one channel's latest snapshot, so a
-snapshot published through the production seam is applied by the same call
-with no second object in between. X/Y/Z of the applied vector are the
-published snapshot's own values.
+still reads the one channel's latest snapshot, so an externally published
+snapshot is visible to it with no second object in between.
 
-**One documented difference, in the renderer-facing W slot only.** The wind
-global's W component is the *presentation phase*, `2π·(tick mod cycle)/cycle`
-— explicitly not weather and not saved state. It needs a cycle, and a cycle is
-*fixture* configuration (the stand-in's explicit `cycle_length`). The
-production seam publishes a snapshot somebody else decided and declares no
-cycle of its own, so it declares `EXTERNAL_PRESENTATION_CYCLE = 0` explicitly
-rather than borrowing the fixture's, and W is a flat `0.0` there. A flat phase
-is a renderer input, not a weather or clock decision, and it is asserted by
-the probe rather than assumed. The stand-in's tick-derived phase is untouched.
+**It is refused in external mode** (`no-presentation-phase`), and that is the
+correct answer rather than a limitation. The wind global's W component is the
+*presentation phase* — Grengewald's pinned contract has it as the game-supplied
+motion phase in radians, and the Step-2 record calls W presentation, not
+weather. A phase needs an explicit cycle, and a cycle is *fixture*
+configuration: the stand-in's `cycle_length`. An external weather snapshot
+carries no phase and no cycle, because a weather snapshot has no business
+carrying presentation state.
+
+So the seam refuses rather than inventing one:
+
+| what it does **not** do | why |
+|---|---|
+| write `W = 0.0` | a frozen phase silently makes the real Grengewald motion phase static |
+| borrow the fixture's 240-tick cycle | the fixture's cycle is test configuration, not production policy |
+| invent radians-per-tick | that is presentation policy this issue does not own |
+| add a `phase` field to `WeatherSnapshot` | weather must stay renderer-agnostic |
+
+The refusal says exactly what is and is not true: the external weather
+snapshot is **valid and present**, and this seam simply does not own a
+production presentation phase. Weather is unaffected and fully readable
+through `snapshot()` and `writer_status()`; only this renderer-facing edge is
+out of scope.
+
+**The stand-in's `apply_wind()` is unchanged.** It still applies the animated,
+tick-derived `2π·(tick mod cycle)/cycle` phase from the fixture's own explicit
+cycle, and the engine probe proves both halves: the refusal above, and the
+stand-in path still applying a moving W.
 
 In external mode `seed()` and `cycle_length()` report `-1` — "not available" —
 because no stand-in exists, not `0`. The `seed` key in a snapshot dictionary
@@ -160,6 +184,9 @@ carries the same `-1` there. It was never a snapshot field.
   snapshot intact;
 - the production publish cannot bypass a stand-in that owns the channel;
 - the stand-in still owns its channel and drives whole cycles;
+- the external seam declares **no** presentation cycle and fabricates no phase,
+  while the stand-in's tick-derived phase still moves
+  (`the_external_seam_declares_no_presentation_cycle_and_fabricates_no_phase`);
 - the pre-existing channel and stand-in regressions all still hold.
 
 ### Binding (Rust)
@@ -169,8 +196,8 @@ carries the same `-1` there. It was never a snapshot field.
 - the publish is one whole-snapshot operation with no setter and no
   writer-id parameter;
 - the seam's own source contains no clock;
-- the external mode's presentation cycle is declared, and the stand-in's is
-  unchanged.
+- the external mode fabricates no presentation phase, and the stand-in's
+  explicit cycle and animated W are unchanged.
 
 ### Real engine (pinned Godot 4.7.2)
 
@@ -186,11 +213,13 @@ initialization claims it for `eislek-weather-driver` and creates no stand-in; a
 second initialization is refused either way; `drive(tick)` is refused; one
 complete decided snapshot publishes and reads back through `snapshot()` with
 exactly the seven supplied values and the exact tick; `writer_status()` names
-the production writer; `apply_wind()` derives the global from that snapshot;
-invalid values are refused with the last valid one intact; a second writer is
-refused with both identities named; and a production publish is refused against
-a stand-in-mode node that already owns the channel, so the seam cannot take a
-channel over from whoever holds it.
+the production writer; `apply_wind()` **refuses** with `no-presentation-phase`
+rather than writing a fabricated W (and the refusal leaves the weather intact
+and records no vector); invalid values are refused with the last valid one
+intact; a second writer is refused with both identities named; a production
+publish is refused against a stand-in-mode node that already owns the channel,
+so the seam cannot take a channel over from whoever holds it; and the stand-in
+node's own `apply_wind()` still succeeds with an animated tick-derived W.
 
 The probe supplies **plain test numbers** as if it were Eisleck. Remich has no
 dependency on that driver and remains independently testable.
@@ -239,13 +268,14 @@ silently accommodated.
 
 ## 8. Bite checks (sabotage, reverted)
 
-Two deliberate weakenings were introduced, the acceptance was re-run against
-each, and both were fully reverted afterwards (`git status` clean):
+Deliberate weakenings were introduced, the acceptance was re-run against
+each, and all were fully reverted afterwards (`git status` clean):
 
 | sabotage | caught by |
 |---|---|
 | rename `EXTERNAL_DRIVER_ID` in the core | `the_production_writer_id_is_one_fixed_constant` (Rust) and the engine probe: `reason=wrong-writer … claimed 'saboteur-weather', expected 'eislek-weather-driver'`, exit 1 |
 | remove the ownership check from `WeatherChannel::publish` | four core tests, two binding tests, and — after it was found missing — the engine probe: `reason=takeover-accepted`, exit 1 |
+| restore the fabricated flat-W external apply (cycle `0`) | the engine probe: `reason=apply-accepted … it must refuse rather than fabricate a presentation phase`, exit 1, and the binding test `the_external_seam_declares_no_presentation_cycle_and_fabricates_no_phase` |
 
 The second one is why the probe now carries the takeover case. The first
 engine run of that sabotage still reported `REMICH_EXTERNAL_WEATHER_OK`: the
@@ -260,8 +290,14 @@ as a bypass.
 
 Weather generation, climate, scheduling, cloud policy, weather transitions,
 random weather, player weather controls, per-field gameplay setters, a second
-channel, another clock, a save-format change, a new Remich lane or phase, and
-any dependency on Eisleck. Issue #19 is **not** closed by this: it is resolved
+channel, another clock, a save-format change, a new Remich lane or phase, any
+dependency on Eisleck, and **the production presentation-phase policy** — how
+Grengewald's motion phase is generated for an externally driven node. That
+belongs to the later Larochette/Grengewald presentation integration; until then
+this seam refuses `apply_wind()` rather than guessing.
+
+This is the **weather-channel seam**, not the complete wind-rendering
+connection. Issue #19 is **not** closed by this: it is resolved
 only once the merged seam has been used successfully for the stopped Eisleck
 Step-3 end-to-end one-channel acceptance.
 

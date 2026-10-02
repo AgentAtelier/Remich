@@ -538,10 +538,9 @@ fn clock_failure(code: &str, message: &str) -> VarDictionary {
 // The native object owns the Rust-held channel: one writer, everyone else
 // reads. Godot keeps no second copy of tick, wind, rain, temperature or
 // light — every read here goes straight to `remich_core::weather`, and every
-// publish goes through the stand-in driver that owns the channel. There is
-// no setter for arbitrary weather values: `drive` takes the integer world
-// tick and publishes what the fixture schedule says for that tick, nothing
-// else.
+// publish goes through the driver that owns the channel: the stand-in fixture
+// via `drive`, the production seam via `publish_external_snapshot`. There is
+// no setter for arbitrary weather values in either mode.
 // ---------------------------------------------------------------------------
 
 /// The presentation phase passed to the wind global's W component, in
@@ -560,20 +559,25 @@ fn presentation_phase(tick: u64, cycle_length: u64) -> f64 {
     phase as f64 / cycle_length as f64 * std::f64::consts::TAU
 }
 
-/// The presentation cycle an **externally driven** node applies the wind
-/// global with: none.
+/// The explicit presentation cycle this node's mode declares — `Some` for the
+/// stand-in fixture, `None` for the production seam.
 ///
-/// The phase needs a cycle, and a cycle is *fixture* configuration — the
-/// stand-in driver's explicit `cycle_length`, supplied by the test project
-/// and never by the weather itself. The production seam publishes a snapshot
-/// somebody else decided and declares no cycle of its own, so it declares
-/// this value explicitly instead of borrowing the fixture's: W is 0.0 (the
-/// already-handled zero-cycle case of [`presentation_phase`]) and the
-/// weather-controlled X/Y/Z of the applied vector are the published
-/// snapshot's, unchanged. W is presentation, not weather — a flat phase is a
-/// renderer input, not a weather or clock decision, and it is asserted rather
-/// than assumed (see `godot_external/external_weather_probe.gd`).
-const EXTERNAL_PRESENTATION_CYCLE: u64 = 0;
+/// A presentation cycle is *fixture* configuration: it is the stand-in driver's
+/// `cycle_length`, supplied by the test project and never by the weather. The
+/// production seam publishes a snapshot somebody else decided, and an external
+/// weather snapshot carries no motion phase — W is the game-supplied
+/// presentation phase in radians, not weather — so **no** cycle is declared
+/// there and none is borrowed from the fixture.
+///
+/// `None` therefore means "this mode cannot produce a presentation phase", and
+/// the caller refuses rather than inventing one: writing a frozen `0.0`, or the
+/// fixture's cycle, into the real Grengewald motion phase would silently make
+/// production wind animation static. Deciding the production presentation
+/// phase belongs to the later Larochette/Grengewald presentation integration,
+/// not to this weather-channel seam (see `no_presentation_phase_failure`).
+fn presentation_cycle_of(stand_in: Option<&StandInWeather>) -> Option<u64> {
+    stand_in.map(StandInWeather::cycle_length)
+}
 
 /// The exact vector the wind global is written with, derived from the
 /// snapshot: X ← direction X, Y ← direction Z, Z ← wind strength adapted to
@@ -638,13 +642,14 @@ fn publish_external_snapshot_through(
 /// snapshot.
 ///
 /// One instance exists in the test project (`godot/weather.gd`, the `Weather`
-/// autoload). `initialize` is the only way in, and it claims the channel for
-/// the stand-in driver — a second initialization is refused rather than
-/// replacing the first. `drive` publishes for a supplied integer world tick
-/// (the ticks come from the shared world clock; this class never advances
-/// time itself), `snapshot`/`writer_status` are plain reads, and
-/// `apply_wind` performs the one live write of the Grengewald wind global
-/// from the current snapshot through the engine's real setter.
+/// autoload). `initialize` and `initialize_external` are the two ways in (see
+/// below). Whichever ran first claims the channel; a second initialization is
+/// refused rather than replacing the first. `drive` publishes for a supplied
+/// integer world tick (the ticks come from the shared world clock; this class
+/// never advances time itself), `publish_external_snapshot` publishes one
+/// complete externally decided snapshot, `snapshot`/`writer_status` are plain
+/// reads, and `apply_wind` performs the one live write of the Grengewald wind
+/// global from the current snapshot through the engine's real setter.
 ///
 /// ## Two ways in, one channel (Remich issue #19)
 ///
@@ -658,6 +663,12 @@ fn publish_external_snapshot_through(
 /// through `publish_external_snapshot`. The two are alternatives on one
 /// instance — the first initialization wins and the second is refused, so
 /// they can never both hold the channel, and neither displaces the other.
+///
+/// These are the two **named** identities Remich's own built-in paths use.
+/// The channel API itself stays generic: `try_claim_writer` deliberately
+/// accepts an arbitrary identity, so acceptance can watch a distinct second
+/// writer be refused. It is this production *binding* path, not the channel,
+/// that fixes the production identity to the constant.
 #[derive(GodotClass)]
 #[class(base = Node)]
 pub struct RemichWeather {
@@ -958,25 +969,32 @@ impl RemichWeather {
     /// [`Self::last_applied_wind`]. Refused when no snapshot exists.
     ///
     /// This is the binding's one live render write, and it reads **the one
-    /// channel** in either mode: a snapshot published through
-    /// [`Self::publish_external_snapshot`] is applied by this same call, from
-    /// the same Rust channel, with no second object in between. The
+    /// channel** in whichever mode published the snapshot: a snapshot published
+    /// through [`Self::publish_external_snapshot`] is visible to this same call,
+    /// from the same Rust channel, with no second object in between. The
     /// snapshot itself never becomes renderer-specific.
+    ///
+    /// **Refused in the production seam** (`no-presentation-phase`). W is the
+    /// game-supplied *presentation phase* in radians — not weather, not part of
+    /// a weather snapshot — and a phase needs an explicit cycle, which is the
+    /// stand-in fixture's `cycle_length`. The production seam declares no cycle
+    /// and this binding refuses to fabricate one: a frozen `0.0` would silently
+    /// make the real Grengewald motion phase static. The externally decided
+    /// weather itself is unaffected and fully readable through
+    /// [`Self::snapshot`]; only this renderer-facing edge is out of scope here.
     #[func]
     fn apply_wind(&mut self) -> VarDictionary {
         let Some(channel) = self.channel.as_ref() else {
             return weather_failure("not-initialized", "call initialize first");
         };
-        // The presentation cycle is the stand-in fixture's explicit cycle. The
-        // production seam declares none of its own (EXTERNAL_PRESENTATION_CYCLE),
-        // so W is 0.0 there — see that constant.
-        let cycle_length = self
-            .stand_in
-            .map_or(EXTERNAL_PRESENTATION_CYCLE, |stand_in| {
-                stand_in.cycle_length()
-            });
         let Some(snapshot) = channel.read() else {
             return weather_failure("no-snapshot", "no snapshot has been published yet");
+        };
+        // A presentation phase exists only where a presentation cycle was
+        // declared. The stand-in fixture has one; the production seam has none,
+        // and says so instead of inventing a motion phase.
+        let Some(cycle_length) = presentation_cycle_of(self.stand_in.as_ref()) else {
+            return no_presentation_phase_failure();
         };
 
         let [x, y, z, w] = wind_vector(&snapshot, cycle_length);
@@ -1109,6 +1127,28 @@ fn no_stand_in_message(operation: &str) -> String {
         "this weather node is in the production seam: writer '{EXTERNAL_DRIVER_ID}' owns the one \
          channel and there is no stand-in schedule to {operation}. Publish the decided snapshot \
          with publish_external_snapshot(tick, ...) instead."
+    )
+}
+
+/// The refusal an externally driven node gives to `apply_wind()`.
+///
+/// It separates the two things deliberately: the **weather** seam is healthy and
+/// has published a valid, present snapshot, and this is the *presentation* side
+/// of the wind global that it does not own. W is the game-supplied motion phase
+/// in radians; no weather snapshot carries one, so there is nothing honest to
+/// write there. Freezing it at `0.0`, or borrowing the fixture's 240-tick cycle,
+/// would silently make the real Grengewald motion phase static — so this seam
+/// refuses and leaves that decision to the later presentation integration.
+fn no_presentation_phase_failure() -> VarDictionary {
+    weather_failure(
+        "no-presentation-phase",
+        &format!(
+            "the external weather snapshot on this node is valid and present, but this seam does \
+             not own a production presentation phase: writer '{EXTERNAL_DRIVER_ID}' owns the one \
+             channel, and the wind global's W is the game-supplied motion phase in radians, not \
+             weather. Read the decided weather through snapshot() and writer_status(); supply the \
+             motion phase where the presentation is owned instead."
+        ),
     )
 }
 
@@ -1873,25 +1913,54 @@ mod tests {
         assert_eq!(channel.writer_id(), Some(STAND_IN_DRIVER_ID));
     }
 
-    /// The production seam declares no presentation cycle of its own, so W is
-    /// a flat 0.0 there while the weather-controlled X/Y/Z still come straight
-    /// from the published snapshot. The stand-in's explicit cycle is
-    /// untouched, so its tick-derived phase still moves.
+    /// The production seam declares **no** presentation cycle, so it refuses to
+    /// produce a motion phase at all — it never freezes W at `0.0` and never
+    /// borrows the fixture's cycle. The stand-in's explicit cycle is untouched,
+    /// so its tick-derived phase still moves.
     #[test]
-    fn the_external_seam_declares_no_presentation_cycle_but_keeps_the_snapshot_mapping() {
-        assert_eq!(EXTERNAL_PRESENTATION_CYCLE, 0);
-        assert_eq!(presentation_phase(137, EXTERNAL_PRESENTATION_CYCLE), 0.0);
+    fn the_external_seam_declares_no_presentation_cycle_and_fabricates_no_phase() {
+        // The mode itself is what decides: no stand-in driver means no
+        // presentation cycle, which is the refusal, not a default value.
+        assert_eq!(presentation_cycle_of(None), None, "the seam declares no cycle");
 
-        let snapshot = WeatherSnapshot::new(137, 0.6, 0.8, 0.42, 0.25, 7.5, 0.33)
-            .expect("a complete decided snapshot");
-        let [x, y, z, w] = wind_vector(&snapshot, EXTERNAL_PRESENTATION_CYCLE);
-        assert_eq!(x, 0.6, "X is the published direction X");
-        assert_eq!(y, 0.8, "Y is the published direction Z");
-        assert_eq!(z, 0.42, "Z is the published strength");
-        assert_eq!(w, 0.0, "W is presentation, and this seam declares no cycle");
+        let stand_in = StandInWeather::new(70021, 240).expect("valid fixture cycle");
+        assert_eq!(
+            presentation_cycle_of(Some(&stand_in)),
+            Some(240),
+            "the stand-in's own explicit cycle is unchanged"
+        );
+
+        // Nothing in the binding invents a cycle for the external mode, and no
+        // frozen phase is written on its behalf. Scanned over the binding's own
+        // code, so this test's own list of names cannot satisfy or trip itself.
+        let code = include_str!("lib.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the test module is last");
+        assert!(
+            !code.contains(&["EXTERNAL", "PRESENTATION_CYCLE"].concat()),
+            "the seam must declare no presentation cycle of its own"
+        );
+        let seam_start = code
+            .find("fn no_presentation_phase_failure")
+            .expect("the refusal exists");
+        let refusal = &code[seam_start..];
+        for stated in ["no-presentation-phase", "valid and present", "motion phase"] {
+            assert!(
+                refusal.contains(stated),
+                "the refusal must state '{stated}'"
+            );
+        }
 
         // The stand-in's phase is unchanged: it still varies with the tick.
         assert_ne!(presentation_phase(0, 240), presentation_phase(60, 240));
+        let snapshot = WeatherSnapshot::new(137, 0.6, 0.8, 0.42, 0.25, 7.5, 0.33)
+            .expect("a complete decided snapshot");
+        assert_eq!(
+            wind_vector(&snapshot, 240)[3],
+            presentation_phase(137, 240),
+            "the fixture's applied W is still the tick-derived phase"
+        );
     }
 
     /// The Godot layer converts and forwards: it never scores.

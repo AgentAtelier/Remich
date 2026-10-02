@@ -30,13 +30,17 @@
 #      valid snapshot survives;
 #  10. a distinct second writer is refused on the production channel;
 #  11. the production publish cannot bypass a stand-in that owns the channel;
-#  12. the stand-in mode still owns its channel and drives whole cycles;
+#  12. the stand-in mode still owns its channel and drives whole cycles, and
+#      its presentation phase is still the animated tick-derived one;
 #  13. the binding's production publish is one whole-snapshot operation that
 #      takes no writer identity and offers no per-field setter;
 #  14. the production seam holds no clock: no delta, no wall time, no counter;
 #  15. the existing readers are unchanged: `snapshot`, `writer_id`,
 #      `writer_status`, `apply_wind` are still the readers, and `apply_wind`
-#      still reads the one channel in either mode;
+#      still reads the one channel's snapshot in either mode;
+#  15b. `apply_wind` refuses in external mode (`no-presentation-phase`) instead
+#      of inventing a production presentation phase: no cycle 0, no frozen W,
+#      no borrowed fixture cycle, and the refusal names the valid weather;
 #  16. the Godot wrapper for the fixture is byte-for-byte unchanged — the
 #      stand-in fixture was not converted into production policy;
 #  17. the seam is proven through the REAL engine: pinned Godot 4.7.2 loads the
@@ -45,13 +49,17 @@
 #      with no stand-in driver;
 #  19. a complete decided snapshot publishes and reads back with exactly the
 #      seven supplied values and the exact tick;
-#  20. the wind global derives from that externally published snapshot;
+#  20. `apply_wind()` REFUSES in external mode with `no-presentation-phase`; it
+#      does not silently write a fabricated/frozen W, and the stand-in path still
+#      applies an animated tick-derived W;
 #  21. invalid values are refused in-engine and the last valid snapshot stands;
 #  22. `drive(tick)` is refused in external mode — no stand-in weather is
 #      silently generated;
 #  23. a second distinct writer is refused in-engine, naming both writers;
 #  23b. a production publish cannot overwrite a stand-in that owns the channel,
 #       proven in-engine and named on both sides;
+#  23c. the writer-identity assertion in the probe is a direct string check (a
+#       non-numeric id must not be able to pass by converting to zero);
 #  24. the committed Remich weather acceptance still passes unchanged (run as a
 #      sub-check, with its own pre-existing failures reported as such);
 #  25. no generated trace, staging or build state is tracked;
@@ -346,6 +354,21 @@ else
     fail "binding test not green: the_stand_in_mode_still_owns_its_channel_and_drives_whole_cycles"
 fi
 
+# The stand-in's own phase behaviour: a tick-derived, animated W that depends on
+# the explicit fixture cycle. This is the behaviour the external mode must not
+# fake, and it must be unchanged by the refusal above.
+for test_name in \
+    the_motion_phase_is_presentation_from_the_integer_tick \
+    the_external_seam_declares_no_presentation_cycle_and_fabricates_no_phase
+do
+    if test_green "$test_name" "$LOG_GDEX"; then
+        pass "binding phase test green: $test_name"
+    else
+        fail "binding phase test not green: $test_name"
+        tail -n 20 "$LOG_GDEX" | sed 's/^/      | /'
+    fi
+done
+
 # The pre-existing stand-in regressions must all still be green — this seam
 # changed the binding's RemichWeather, so they are re-proved here rather than
 # assumed.
@@ -361,7 +384,6 @@ for test_name in \
     the_stand_in_driver_holds_no_time_state \
     the_weather_source_accumulates_no_time_and_uses_no_entropy_source \
     the_wind_vector_reads_the_snapshot_and_the_tick_only \
-    the_motion_phase_is_presentation_from_the_integer_tick \
     the_binding_uses_the_real_setter_and_no_getter
 do
     if test_green "$test_name" "$LOG_CORE" || test_green "$test_name" "$LOG_GDEX"; then
@@ -447,31 +469,72 @@ for reader in snapshot writer_id writer_status apply_wind; do
     fi
 done
 
-# apply_wind reads the channel in both modes — it must not require the stand-in.
-# Read the whole function (to the next method at the same indent), not just the
-# first brace, or a guard clause would look like the entire body.
+# apply_wind reads the channel's snapshot in either mode — the weather half is
+# mode-independent — but the renderer-facing W slot needs a presentation cycle,
+# which only the stand-in fixture declares. Read the whole function (to the next
+# method at the same indent), not just the first brace, or a guard clause would
+# look like the entire body.
 apply_body="$(awk '
     /^[[:space:]]*fn apply_wind\(/ { inside = 1 }
     inside && /^    #\[func\]$/ && seen { inside = 0 }
     inside { print; seen = 1 }
 ' "$GDEX_SRC" 2>/dev/null)"
-if printf '%s' "$apply_body" | grep -q 'EXTERNAL_PRESENTATION_CYCLE'; then
-    pass "apply_wind handles the external mode's declared presentation cycle"
-else
-    fail "apply_wind does not handle the external mode"
-fi
 if printf '%s' "$apply_body" | grep -q 'channel.read()'; then
     pass "apply_wind reads the one channel's latest snapshot"
 else
     fail "apply_wind does not read the channel"
 fi
-# It must not demand the stand-in: the old body took `Some(stand_in)` as a
-# precondition, which is exactly what made it unavailable to the seam.
-if printf '%s' "$apply_body" | grep -qE 'Some\(channel\), *Some\(stand_in\)'; then
-    fail "apply_wind still requires a stand-in driver; it must work in either mode"
+if printf '%s' "$apply_body" | grep -q 'presentation_cycle_of'; then
+    pass "apply_wind takes its presentation cycle from the node's own mode"
 else
-    pass "apply_wind no longer requires a stand-in driver"
+    fail "apply_wind does not ask the node's mode for a presentation cycle"
 fi
+if printf '%s' "$apply_body" | grep -q 'no-presentation-phase\|no_presentation_phase_failure'; then
+    pass "apply_wind refuses in the external mode instead of inventing a phase"
+else
+    fail "apply_wind does not refuse when no presentation cycle exists"
+fi
+# The blocker: no fabricated, frozen or borrowed presentation phase for the
+# external mode. A cycle 0, a hard-coded W, or a default that silently writes a
+# static motion phase must not come back. The names are assembled at runtime so
+# this list cannot trip itself, and the scan covers the binding's own code — its
+# test module may of course *name* the constant it asserts is gone.
+gdex_code="$(sed -n '1,/^#\[cfg(test)\]/p' "$GDEX_SRC" 2>/dev/null)"
+frozen_cycle="$(printf 'EXTERNAL_%s_CYCLE' 'PRESENTATION')"
+any_cycle="$(printf '%s_CYCLE' 'PRESENTATION')"
+for forbidden in "$frozen_cycle" "$any_cycle"; do
+    if printf '%s' "$gdex_code" | grep -qF "$forbidden"; then
+        fail "the binding's own code declares '$forbidden': the external seam must fabricate no phase"
+    else
+        pass "the binding's own code declares no '$forbidden'"
+    fi
+done
+# No substituted default cycle either, anywhere in the apply path.
+if printf '%s' "$apply_body" | grep -qE '\.unwrap_or\(|0 *as *u64|PRESENTATION'; then
+    fail "apply_wind substitutes a cycle or phase constant — it must refuse instead"
+else
+    pass "apply_wind substitutes no cycle and names no phase constant"
+fi
+if printf '%s' "$apply_body" | grep -qE 'Some\(channel\), *Some\(stand_in\)'; then
+    fail "apply_wind still gates the whole read on a stand-in driver"
+else
+    pass "apply_wind does not gate the weather read on a stand-in driver"
+fi
+
+# The refusal must say the weather is valid and present, and that only the
+# presentation phase is unowned — otherwise it reads as a broken seam.
+refusal_body="$(awk '
+    /^fn no_presentation_phase_failure\(/ { inside = 1 }
+    inside && /^}$/ { print; inside = 0; next }
+    inside { print }
+' "$GDEX_SRC" 2>/dev/null)"
+for stated in "no-presentation-phase" "valid and present" "motion phase"; do
+    if printf '%s' "$refusal_body" | grep -qF "$stated"; then
+        pass "the refusal states '$stated'"
+    else
+        fail "the no-presentation-phase refusal does not state '$stated'"
+    fi
+done
 
 # ------------------------------------ 16. the committed fixture is unchanged
 header "16. The committed stand-in fixture was not converted into production policy"
@@ -625,6 +688,21 @@ else
     fail "drive(tick) was not refused in external mode"
 fi
 
+# 20. apply_wind() refused in external mode. Rust prints the refusal with its
+# code, so the log shows the seam declining rather than writing a W.
+phase_line="$(grep -h 'RemichWeather: no-presentation-phase' "$LOG_RUN" 2>/dev/null | head -1)"
+if [ -n "$phase_line" ]; then
+    pass "in-engine: apply_wind() refused in external mode with no-presentation-phase"
+    if printf '%s' "$phase_line" | grep -qF 'valid and present' \
+        && printf '%s' "$phase_line" | grep -qF 'motion phase'; then
+        pass "the refusal states the weather is valid and present and only the phase is unowned"
+    else
+        fail "the no-presentation-phase refusal does not state that plainly"
+    fi
+else
+    fail "the engine run shows no refused external apply_wind() — a phase may have been invented"
+fi
+
 # 19-21. The probe's own assertions ran: a green marker means every one passed.
 # Re-derive the count so the claim is checked, not assumed.
 probe_assertions="$(grep -c '_fail(' "$EXTERNAL_PROBE_GD" 2>/dev/null || true)"
@@ -651,6 +729,44 @@ if grep -qF 'created.call("snapshot")' "$EXTERNAL_PROBE_GD" \
     pass "the probe reads back through the existing snapshot, writer_status and apply_wind"
 else
     fail "the probe does not read back through the existing readers"
+fi
+
+# 20. The probe must prove the external apply_wind REFUSES, and must not claim it
+# is production-qualified. It asserts the refusal code, the reason, that no
+# vector was recorded, and that the weather survived the refusal.
+for case in 'apply-accepted' 'apply-code' 'apply-reason' 'apply-fabricated' 'apply-damaged'; do
+    if grep -qF "\"$case\"" "$EXTERNAL_PROBE_GD"; then
+        pass "the probe asserts the external apply_wind refusal case: $case"
+    else
+        fail "the probe does not assert the apply_wind refusal case $case"
+    fi
+done
+if grep -qF 'const NO_PHASE_CODE := "no-presentation-phase"' "$EXTERNAL_PROBE_GD"; then
+    pass "the probe pins the expected refusal code no-presentation-phase"
+else
+    fail "the probe does not pin the no-presentation-phase refusal code"
+fi
+# And the stand-in half of the same probe must still prove the animated W.
+for case in 'stand-in-apply-refused' 'stand-in-w-wrong' 'stand-in-w-static'; do # noqa: shellcheck
+    if grep -qF "\"$case\"" "$EXTERNAL_PROBE_GD"; then
+        pass "the probe asserts the stand-in apply_wind still works: $case"
+    else
+        fail "the probe does not assert $case"
+    fi
+done
+
+# 23c. The writer-identity assertion must be a direct string identity check. The
+# old form compared `int(writer_id)` as well, which any non-numeric id satisfies
+# with zero and which let a wrong writer slip past the second half.
+if grep -qF 'if str(created.call("writer_id")) != EXTERNAL_WRITER:' "$EXTERNAL_PROBE_GD"; then
+    pass "the probe asserts the writer identity directly as a string"
+else
+    fail "the probe does not assert the writer identity as a direct string comparison"
+fi
+if grep -qF 'int(created.call("writer_id")) != 0' "$EXTERNAL_PROBE_GD"; then
+    fail "the probe still compares the writer id as an integer, which a non-numeric id can pass"
+else
+    pass "the probe does not weaken the writer check with an integer comparison"
 fi
 
 # --------------------------------- 24. the existing weather acceptance holds

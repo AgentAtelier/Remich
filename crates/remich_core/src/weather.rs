@@ -40,15 +40,22 @@
 //! [`WeatherError::WriterConflict`], which names both writers. A refused
 //! publish changes nothing: the last valid snapshot survives untouched.
 //!
-//! ## Two writer identities, one channel (Remich issue #19)
+//! ## Two named writer identities, one generic channel (Remich issue #19)
 //!
-//! This module names both identities that may ever hold the channel, and
-//! nothing else can: [`STAND_IN_DRIVER_ID`], the fixture schedule, and
-//! [`EXTERNAL_DRIVER_ID`], the one production driver that decides the weather
-//! outside this crate. They are alternatives on the **same** channel, never
-//! two channels — the first claim stands and the other is refused. This
-//! module does not implement the production driver: it holds the identity the
-//! binding claims, so a gameplay caller cannot name a different one.
+//! This module names the two identities Remich's own built-in paths use:
+//! [`STAND_IN_DRIVER_ID`], the fixture schedule, and [`EXTERNAL_DRIVER_ID`],
+//! the one production driver that decides the weather outside this crate.
+//! They are alternatives on the **same** channel, never two channels — the
+//! first claim stands and the other is refused. This module does not implement
+//! the production driver: it holds the identity the binding claims, so a
+//! gameplay caller cannot name a different one.
+//!
+//! That is a statement about *Remich's* two paths, not a restriction on the
+//! channel. [`WeatherChannel`] remains the generic one-writer primitive:
+//! [`WeatherChannel::claim_writer`] deliberately accepts any non-empty
+//! identity, which is how the conflict probes and tests above observe a second
+//! writer being refused. What fixes the *production* identity is the binding
+//! path, which claims it from the constant — not a whitelist in the channel.
 
 use std::fmt;
 
@@ -62,11 +69,12 @@ pub const STAND_IN_DRIVER_ID: &str = "stand-in-weather-schedule";
 ///
 /// The production seam. Remich keeps owning the channel and the integer game
 /// clock; the external At Dusk driver (Eisleck) owns *deciding* the weather and
-/// publishes complete snapshots here. This is the only identity the
-/// production path may claim: the value is a constant, never a parameter, so
-/// no gameplay caller can choose a production writer id, and a second distinct
+/// publishes complete snapshots here. This is the identity the production
+/// **binding path** claims: the value is a constant, never a parameter, so no
+/// gameplay caller can choose a production writer id, and a second distinct
 /// identity is still refused by [`WeatherChannel::claim_writer`] with
-/// [`WeatherError::WriterConflict`].
+/// [`WeatherError::WriterConflict`]. The channel itself stays generic and
+/// accepts any non-empty identity.
 ///
 /// The spelling is fixed here once and asserted by the tests in this module
 /// and by the binding. It is the name the issue (#19) uses for the same

@@ -31,9 +31,11 @@ extends Node
 ##      writer and reads back through `snapshot()` with **exactly** the seven
 ##      values supplied, the exact tick preserved;
 ##   5. `writer_status()` names the production writer and the snapshot's tick;
-##   6. the existing `apply_wind()` derives the wind global from that
-##      externally published snapshot, on that same channel, and the recorded
-##      vector is compared against the published values;
+##   6. `apply_wind()` **refuses** in this mode with `no-presentation-phase`
+##      instead of silently writing a frozen `W = 0.0`. W is the game-supplied
+##      motion phase in radians, not weather, and no external weather snapshot
+##      carries one — so this seam refuses to fabricate it, while the decided
+##      weather itself stays valid, present and readable;
 ##   7. invalid values are refused through the existing validation and the last
 ##      valid snapshot survives untouched;
 ##   8. a **second writer is refused from the engine side**, naming both
@@ -42,7 +44,10 @@ extends Node
 ##      channel** — against a stand-in-mode node it is refused with
 ##      `writer-conflict` naming both identities, and that node's snapshot
 ##      stands. (A second node is used for this because it is a different
-##      *mode*; it is freed again, so exactly one live object remains.)
+##      *mode*; it is freed again, so exactly one live object remains.);
+##  10. the stand-in path is unchanged: on a stand-in-mode node the same
+##      `apply_wind()` still succeeds and still derives an animated W from the
+##      integer tick.
 ##
 ## Failure prints `REMICH_EXTERNAL_WEATHER_FAIL reason=... detail=...` and
 ## exits non-zero. Success prints `REMICH_EXTERNAL_WEATHER_OK` and exits 0.
@@ -51,6 +56,11 @@ const WEATHER_CLASS := "RemichWeather"
 const EXPECTATION_FILE := "res://external_weather_probe_expectation.txt"
 const OK_MARKER := "REMICH_EXTERNAL_WEATHER_OK"
 const FAIL_MARKER := "REMICH_EXTERNAL_WEATHER_FAIL"
+
+## The refusal code an externally driven node gives when asked for the wind
+## global's presentation phase. W is game-supplied motion in radians, not
+## weather: the seam must refuse to invent one rather than write a frozen 0.0.
+const NO_PHASE_CODE := "no-presentation-phase"
 
 ## The pinned Grengewald contract: one game-owned shader global.
 const WIND_GLOBAL := "grengewald_wind"
@@ -64,6 +74,11 @@ const EXTERNAL_WRITER := "eislek-weather-driver"
 
 ## The stand-in identity: what this mode must NOT be.
 const STAND_IN_WRITER := "stand-in-weather-schedule"
+
+## The stand-in fixture's own explicit configuration, used only to prove that
+## path is unchanged: a cycle in integer ticks and a tick inside it.
+const STAND_IN_CYCLE_LENGTH := 240
+const STAND_IN_TICK := 130
 
 ## The callables the native class must have, including this seam's two.
 const REQUIRED_CALLABLES: Array[String] = [
@@ -164,8 +179,11 @@ func _run() -> void:
 			int(created.call("cycle_length"))])
 		return
 
-	# Exactly one native object, holding exactly the one channel.
-	if int(created.call("writer_id")) != 0 and str(created.call("writer_id")) != EXTERNAL_WRITER:
+	# Exactly one native object, holding exactly the one channel. A direct
+	# string identity check: comparing the string to the expected string is the
+	# whole assertion. (Converting it to a number first would let any
+	# non-numeric writer id compare equal to 0 and slip through.)
+	if str(created.call("writer_id")) != EXTERNAL_WRITER:
 		_fail("channel-writer", "the channel writer is '%s', expected '%s'" % [
 			str(created.call("writer_id")), EXTERNAL_WRITER])
 		return
@@ -179,7 +197,7 @@ func _run() -> void:
 	if str(again.get("code", "")) != "already-initialized":
 		_fail("second-init-code", "the second initialization failed with '%s'" % str(again.get("code", "")))
 		return
-	var stand_in_init: Dictionary = created.call("initialize", 70021, 240)
+	var stand_in_init: Dictionary = created.call("initialize", 70021, STAND_IN_CYCLE_LENGTH)
 	if bool(stand_in_init.get("ok", false)):
 		_fail("mode-coexist", "stand-in initialization was allowed on an external node")
 		return
@@ -252,7 +270,9 @@ func _run() -> void:
 			int(status.get("snapshot_tick", -1)), TICK])
 		return
 
-	# --- 6. the existing apply_wind reads that same channel -------------------
+	# --- 6. apply_wind refuses rather than inventing a presentation phase ----
+	# The pinned global is still checked: the seam writes it, and it is not being
+	# quietly removed.
 	var declared: Variant = ProjectSettings.get_setting("shader_globals/" + WIND_GLOBAL, null)
 	if str((declared as Dictionary).get("type", "")) != WIND_GLOBAL_TYPE \
 			or (declared as Dictionary).get("value") != WIND_GLOBAL_DEFAULT:
@@ -260,28 +280,41 @@ func _run() -> void:
 			WIND_GLOBAL, WIND_GLOBAL_TYPE])
 		return
 
+	# W is the game-supplied motion phase in radians, not weather. A cycle is
+	# fixture configuration (the stand-in's explicit cycle_length), and no
+	# external weather snapshot carries a phase. So this mode must REFUSE: a
+	# frozen W = 0.0 would silently make the real Grengewald motion phase
+	# static, and borrowing the fixture's 240-tick cycle would invent one.
 	var applied: Dictionary = created.call("apply_wind")
-	if not bool(applied.get("ok", false)):
-		_fail("apply-refused", str(applied.get("error", "")))
+	if bool(applied.get("ok", false)):
+		_fail("apply-accepted", "apply_wind() succeeded in external mode; it must refuse rather \
+			than fabricate a presentation phase (applied: %s)" % str(applied.get("applied", [])))
 		return
-	if int(applied.get("tick", -1)) != TICK:
-		_fail("apply-tick", "the wind write used tick %d, expected the published %d" % [
-			int(applied.get("tick", -1)), TICK])
+	if str(applied.get("code", "")) != NO_PHASE_CODE:
+		_fail("apply-code", "apply_wind() failed with '%s', expected '%s'" % [
+			str(applied.get("code", "")), NO_PHASE_CODE])
 		return
-	var vector: Array = created.call("last_applied_wind")
-	if vector.size() != 4:
-		_fail("applied-missing", "the recorded wind vector has %d components" % vector.size())
+	# The refusal must say the weather is fine and only the phase is not owned
+	# here, so the reason is auditable rather than vague.
+	var apply_reason := str(applied.get("error", ""))
+	if not apply_reason.contains("valid and present") \
+			or not apply_reason.contains("presentation phase"):
+		_fail("apply-reason", "the refusal does not separate the valid weather from the \
+			unowned presentation phase: " + apply_reason)
 		return
-	if not _same_numbers(applied.get("applied", []), vector):
-		_fail("applied-diverged", "the returned and recorded vectors disagree")
+	# A refused apply must write nothing at all: no recorded vector, so no
+	# fabricated W is left behind in the global either.
+	var fabricated: Array = created.call("last_applied_wind")
+	if fabricated.size() != 0:
+		_fail("apply-fabricated", "a refused apply_wind() still recorded a wind vector: %s" % [
+			str(fabricated)])
 		return
-	# X/Y/Z are the externally published snapshot's own values.
-	for entry in [["X", WIND_DIR_X], ["Y", WIND_DIR_Z], ["Z", WIND_STRENGTH]]:
-		var index := ["X", "Y", "Z"].find(str(entry[0]))
-		if absf(float(vector[index]) - float(entry[1])) > VECTOR_TOLERANCE:
-			_fail("wind-component", "the applied %s is %s, the published snapshot says %s" % [
-				str(entry[0]), str(vector[index]), str(entry[1])])
-			return
+	# The weather itself is untouched by the refusal: still valid, still present,
+	# still exactly the seven published values and the exact tick.
+	var after_apply: Dictionary = created.call("snapshot")
+	if JSON.stringify(after_apply) != JSON.stringify(snapshot):
+		_fail("apply-damaged", "the refused apply_wind() changed the published weather")
+		return
 
 	# --- 7. invalid values are refused, the last valid snapshot survives ------
 	# Each entry is [what, wind_dir_x, wind_dir_z, strength, rain, temp, light]
@@ -351,14 +384,14 @@ func _run() -> void:
 		_fail("instantiate-failed", "could not create a stand-in-mode node")
 		return
 	add_child(stand_in_node)
-	var fixture_init := stand_in_node.call("initialize", 70021, 240) as Dictionary
+	var fixture_init := stand_in_node.call("initialize", 70021, STAND_IN_CYCLE_LENGTH) as Dictionary
 	if not bool(fixture_init.get("ok", false)):
 		_fail("stand-in-init-refused", str(fixture_init.get("error", "")))
 		return
 	if str(stand_in_node.call("writer_id")) != STAND_IN_WRITER:
 		_fail("stand-in-writer", "the stand-in node is owned by '%s'" % str(stand_in_node.call("writer_id")))
 		return
-	stand_in_node.call("drive", 130)
+	stand_in_node.call("drive", STAND_IN_TICK)
 	var stand_in_before := JSON.stringify(stand_in_node.call("snapshot"))
 	var takeover: Dictionary = stand_in_node.call("publish_external_snapshot",
 		TICK, WIND_DIR_X, WIND_DIR_Z, WIND_STRENGTH, RAIN, TEMPERATURE, LIGHT)
@@ -376,6 +409,57 @@ func _run() -> void:
 		return
 	if JSON.stringify(stand_in_node.call("snapshot")) != stand_in_before:
 		_fail("takeover-replaced", "the refused publish changed the stand-in's snapshot")
+		return
+
+	# --- 10. the stand-in path is unchanged -----------------------------------
+	# The same apply_wind() that just refused in external mode must still succeed
+	# here, because the stand-in declares the explicit presentation cycle the
+	# fixture supplied. If the refusal had been made unconditional, this fails too.
+	var fixture_applied: Dictionary = stand_in_node.call("apply_wind")
+	if not bool(fixture_applied.get("ok", false)):
+		_fail("stand-in-apply-refused", "apply_wind() was refused on the stand-in node too: %s" % [
+			str(fixture_applied.get("error", ""))])
+		return
+	if int(fixture_applied.get("tick", -1)) != STAND_IN_TICK:
+		_fail("stand-in-apply-tick", "the stand-in wind write used tick %d, expected %d" % [
+			int(fixture_applied.get("tick", -1)), STAND_IN_TICK])
+		return
+	var fixture_vector: Array = stand_in_node.call("last_applied_wind")
+	if fixture_vector.size() != 4:
+		_fail("stand-in-applied-missing", "the stand-in wind vector has %d components" % [
+			fixture_vector.size()])
+		return
+	if not _same_numbers(fixture_applied.get("applied", []), fixture_vector):
+		_fail("stand-in-applied-diverged", "the returned and recorded stand-in vectors disagree")
+		return
+	# The stand-in's W is still the animated, tick-derived presentation phase, not
+	# frozen: tick 130 in a 240-tick cycle is 130/240 of a turn, so W is neither
+	# zero nor the same value a different tick would produce.
+	var expected_w := TAU * float(STAND_IN_TICK) / float(STAND_IN_CYCLE_LENGTH)
+	if absf(float(fixture_vector[3]) - expected_w) > VECTOR_TOLERANCE:
+		_fail("stand-in-w-wrong", "the stand-in's W is %s, expected the tick-derived phase %s" % [
+			str(fixture_vector[3]), str(expected_w)])
+		return
+	# X/Y/Z still come from the stand-in's own published snapshot.
+	var fixture_snapshot: Dictionary = stand_in_node.call("snapshot")
+	var fixture_components := [
+		float(fixture_snapshot.get("wind_dir_x", NAN)),
+		float(fixture_snapshot.get("wind_dir_z", NAN)),
+		float(fixture_snapshot.get("wind_strength", NAN)),
+	]
+	for index in 3:
+		if absf(float(fixture_vector[index]) - fixture_components[index]) > VECTOR_TOLERANCE:
+			_fail("stand-in-wind-component", "the stand-in's applied component %d is %s, its \
+				snapshot says %s" % [index, str(fixture_vector[index]), str(fixture_components[index])])
+			return
+	# One tick further and the phase moves: it is derived from the integer tick,
+	# never held still.
+	stand_in_node.call("drive", STAND_IN_TICK + 1)
+	stand_in_node.call("apply_wind")
+	var moved: Array = stand_in_node.call("last_applied_wind")
+	if moved.size() != 4 or absf(float(moved[3]) - float(fixture_vector[3])) < 1e-6:
+		_fail("stand-in-w-static", "the stand-in's W did not change between ticks %d and %d" % [
+			STAND_IN_TICK, STAND_IN_TICK + 1])
 		return
 	stand_in_node.queue_free()
 	await get_tree().process_frame
