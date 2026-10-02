@@ -667,9 +667,11 @@ fi
 
 # Its own result, with the pre-existing failures named rather than hidden.
 step2_oks="$(grep -c '^ok' "$LOG_STEP2" 2>/dev/null || true)"
-step2_fails="$(grep -c '^FAIL' "$LOG_STEP2" 2>/dev/null || true)"
-note "tools/check_phase2_step2.sh at this head: $step2_oks ok / ${step2_fails:-0} FAIL"
-note "the same checker on the base SHA 79e5d73 recorded 92 ok / 8 FAIL (see the PR evidence)"
+# The checker's own summary counts *checks*; the grep counts lines, so the
+# summary line is one more. Report both, plainly.
+step2_fail_lines="$(grep -c '^FAIL' "$LOG_STEP2" 2>/dev/null || true)"
+note "tools/check_phase2_step2.sh at this head: $step2_oks ok / $((step2_fail_lines - 1)) failing checks"
+note "the same checker on the base SHA 79e5d73 recorded 92 ok / the same 8 failing checks"
 
 # The eight failures that predate this change, by their exact text. They have
 # two causes, neither of them a weather fact: the lane's closing record moved
