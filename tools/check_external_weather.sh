@@ -1,0 +1,795 @@
+#!/usr/bin/env bash
+# Production-seam weather acceptance — "the one channel, externally driven"
+# (Remich issue #19).
+#
+# One command, from anywhere:
+#
+#     bash tools/check_external_weather.sh
+#
+# This is the lead-owned At Dusk integration seam: Remich keeps owning the one
+# shared weather channel and the authoritative integer clock, and an external
+# driver (Eisleck) decides the weather and publishes complete snapshots through
+# that same channel. It re-proves, directly, that the seam exists and that
+# every existing invariant still holds.
+#
+# Requirements, as checks (numbered as the change asked for them):
+#
+#   1. this change is a descendant of the base it was cut from;
+#   2. the core weather tests are green, and so is the whole workspace;
+#   3. the workspace builds warning-free;
+#   4. the engine-free core names no engine (the firewall holds);
+#   5. `WeatherSnapshot` still declares exactly the seven planned fields — no
+#      cloud, no phase, no new field;
+#   6. the production writer id is one fixed constant in the core, spelled
+#      `eislek-weather-driver`, distinct from the stand-in's;
+#   7. the two identities alternate on ONE channel: neither displaces the
+#      other, and both refusals are asserted;
+#   8. an external publish stores the supplied snapshot and tick verbatim,
+#      including out-of-order and non-adjacent ticks;
+#   9. invalid values are refused through the existing validation and the last
+#      valid snapshot survives;
+#  10. a distinct second writer is refused on the production channel;
+#  11. the production publish cannot bypass a stand-in that owns the channel;
+#  12. the stand-in mode still owns its channel and drives whole cycles;
+#  13. the binding's production publish is one whole-snapshot operation that
+#      takes no writer identity and offers no per-field setter;
+#  14. the production seam holds no clock: no delta, no wall time, no counter;
+#  15. the existing readers are unchanged: `snapshot`, `writer_id`,
+#      `writer_status`, `apply_wind` are still the readers, and `apply_wind`
+#      still reads the one channel in either mode;
+#  16. the Godot wrapper for the fixture is byte-for-byte unchanged — the
+#      stand-in fixture was not converted into production policy;
+#  17. the seam is proven through the REAL engine: pinned Godot 4.7.2 loads the
+#      staged extension and the probe's marker appears;
+#  18. the in-engine run claims the one channel for the production writer id,
+#      with no stand-in driver;
+#  19. a complete decided snapshot publishes and reads back with exactly the
+#      seven supplied values and the exact tick;
+#  20. the wind global derives from that externally published snapshot;
+#  21. invalid values are refused in-engine and the last valid snapshot stands;
+#  22. `drive(tick)` is refused in external mode — no stand-in weather is
+#      silently generated;
+#  23. a second distinct writer is refused in-engine, naming both writers;
+#  24. the committed Remich weather acceptance still passes unchanged (run as a
+#      sub-check, with its own pre-existing failures reported as such);
+#  25. no generated trace, staging or build state is tracked;
+#  26. no other repository was modified;
+#  27. the worktree is clean.
+#
+# Where behaviour can prove the rule, it does. The writer-identity, validation,
+# tick and one-writer properties are asserted by running the Rust tests and the
+# engine, not by grepping for the words.
+
+set -uo pipefail
+
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
+cd "$REPO_ROOT" || exit 1
+
+GODOT_BIN="/home/mrg/Documents/Project/Yolanda/.godot-local/engine/4.7.2/Godot_v4.7.2-stable_linux.x86_64"
+
+# The base this seam was cut from: Remich main at the handoff.
+BASE_SHA="79e5d73b8d83bc09800c3a6b89dc36980e45ea26"
+# The committed stand-in bridge revision: this change does not touch it.
+COMMITTED_WEATHER_REV="remich-weather-v1"
+# The one production writer id, asserted verbatim.
+EXTERNAL_WRITER="eislek-weather-driver"
+STAND_IN_WRITER="stand-in-weather-schedule"
+
+# Field names the snapshot must NOT gain, assembled at runtime so this list
+# never matches against this checker's own text.
+CLOUD_FIELD="$(printf 'cl%s' 'oud')"
+PHASE_FIELD="$(printf 'phas%s:' 'e')"
+MOTION_FIELD="$(printf 'mot%s:' 'ion')"
+PRESENTATION_FIELD="$(printf 'pres%s:' 'sure')"
+
+WEATHER_SRC="crates/remich_core/src/weather.rs"
+CORE_SRC_DIR="crates/remich_core/src"
+GDEX_SRC="crates/remich_gdext/src/lib.rs"
+FIXTURE_WEATHER_GD="godot/weather.gd"
+FIXTURE_PROBE_GD="godot/weather_probe.gd"
+EXTERNAL_DIR="godot_external_weather"
+EXTERNAL_PROBE_GD="${EXTERNAL_DIR}/external_weather_probe.gd"
+RUN_EXTERNAL="tools/run_external_weather.sh"
+STAGE_EXTERNAL="tools/stage_external_weather.sh"
+STEP2_CHECKER="tools/check_phase2_step2.sh"
+
+LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/remich-extweather.XXXXXX")" || exit 1
+trap 'rm -rf "$LOG_DIR"' EXIT
+
+LOG_BUILD="$LOG_DIR/build.log"
+LOG_TEST="$LOG_DIR/test.log"
+LOG_CORE="$LOG_DIR/core-weather-tests.log"
+LOG_GDEX="$LOG_DIR/gdext-tests.log"
+LOG_RUN="$LOG_DIR/external-run.log"
+LOG_STEP2="$LOG_DIR/step2.log"
+
+failures=0
+pass() { printf 'ok    %s\n' "$1"; }
+fail() { printf 'FAIL  %s\n' "$1"; failures=$((failures + 1)); }
+note() { printf '      %s\n' "$1"; }
+header() { printf '\n== %s ==\n' "$1"; }
+
+# ---------------------------------------------------------------------------
+# Run everything the numbered checks then read from.
+# ---------------------------------------------------------------------------
+
+cargo build --workspace >"$LOG_BUILD" 2>&1
+cargo test --workspace >"$LOG_TEST" 2>&1
+cargo test -p remich_core weather::tests >"$LOG_CORE" 2>&1
+cargo test -p remich_gdext >"$LOG_GDEX" 2>&1
+
+run_rc=0
+bash "$RUN_EXTERNAL" >"$LOG_RUN" 2>&1 || run_rc=$?
+RUN_RC=$run_rc
+
+bash "$STEP2_CHECKER" >"$LOG_STEP2" 2>&1
+STEP2_RC=$?
+
+# A helper the checks use to ask whether a named Rust test went green.
+test_green() {
+    grep -qE "(^|[[:space:]:])$1 \.\.\. ok$" "$2" 2>/dev/null
+}
+
+# --------------------------------------------- 1. the base is an ancestor
+header "1. This change descends from the base SHA it was cut from"
+
+if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+    if git merge-base --is-ancestor "$BASE_SHA" HEAD 2>/dev/null; then
+        pass "the base $BASE_SHA is an ancestor of HEAD"
+    else
+        fail "the base $BASE_SHA is NOT an ancestor of HEAD"
+    fi
+else
+    fail "the base $BASE_SHA is not present in this repository"
+fi
+note "HEAD is $(git rev-parse HEAD)"
+
+# --------------------------------------- 2-3. the workspace builds and tests
+header "2-3. The workspace builds warning-free and its tests pass"
+
+if grep -q '^warning' "$LOG_BUILD"; then
+    fail "the workspace build emitted warnings:"
+    grep '^warning' "$LOG_BUILD" | head -n 10 | sed 's/^/      | /'
+else
+    pass "cargo build --workspace is warning-free"
+fi
+
+if grep -q '^warning' "$LOG_TEST"; then
+    fail "cargo test emitted warnings:"
+    grep '^warning' "$LOG_TEST" | head -n 10 | sed 's/^/      | /'
+else
+    pass "cargo test --workspace is warning-free"
+fi
+
+if grep -qE 'test result: ok\.' "$LOG_TEST" && ! grep -q 'FAILED' "$LOG_TEST"; then
+    pass "cargo test --workspace passes"
+    grep -E 'test result:' "$LOG_TEST" | sed 's/^/      | /'
+else
+    fail "cargo test --workspace did not pass:"
+    tail -n 30 "$LOG_TEST" | sed 's/^/      | /'
+fi
+
+# --------------------------------------------- 4. the core is still engine-free
+header "4. The engine-free core still names no engine"
+
+if grep -rqiE 'godot|gdext' "$CORE_SRC_DIR"; then
+    fail "remich_core's source names an engine (the firewall is broken):"
+    grep -rniE 'godot|gdext' "$CORE_SRC_DIR" | head -n 5 | sed 's/^/      | /'
+else
+    pass "the engine-free core — including $WEATHER_SRC — names no engine"
+fi
+
+# ------------------------------- 5. the snapshot's seven fields, unchanged
+header "5. WeatherSnapshot still declares exactly the seven planned fields"
+
+struct_body="$(sed -n '/pub struct WeatherSnapshot/,/^}/p' "$WEATHER_SRC" 2>/dev/null)"
+if [ -z "$struct_body" ]; then
+    fail "$WEATHER_SRC does not declare WeatherSnapshot"
+else
+    missing=0
+    for field in tick wind_dir_x wind_dir_z wind_strength rain temperature light; do
+        if ! printf '%s' "$struct_body" | grep -qE "^[[:space:]]*(pub )?${field}:"; then
+            fail "the snapshot does not declare the field '$field'"
+            missing=1
+        fi
+    done
+    if [ "$missing" = "0" ]; then
+        pass "the snapshot declares tick, wind_dir_x, wind_dir_z, wind_strength, rain, temperature, light"
+    fi
+    # No field was added — in particular no cloud, and no presentation state.
+    # The banned names are assembled at runtime, so this list cannot trip
+    # itself against this checker's own text.
+    added_problems=""
+    for added in "${CLOUD_FIELD}" "${PHASE_FIELD}" "${MOTION_FIELD}" "${PRESENTATION_FIELD}"; do
+        if printf '%s' "$struct_body" | grep -qF "$added"; then
+            added_problems="$added_problems'$added' "
+        fi
+    done
+    if [ -z "$added_problems" ]; then
+        pass "no cloud, phase or presentation field was added to the snapshot"
+    else
+        fail "the snapshot gained a field this seam must not add: $added_problems"
+    fi
+fi
+
+if test_green the_snapshot_carries_the_planned_fields "$LOG_CORE"; then
+    pass "behaviour test green: the_snapshot_carries_the_planned_fields"
+else
+    fail "behaviour test not green: the_snapshot_carries_the_planned_fields"
+fi
+
+if test_green the_snapshot_carries_no_presentation_phase "$LOG_GDEX"; then
+    pass "behaviour test green: the_snapshot_carries_no_presentation_phase"
+else
+    fail "behaviour test not green: the_snapshot_carries_no_presentation_phase"
+fi
+
+# -------------------------------- 6. one fixed production writer identity
+header "6. The production writer id is one fixed constant in the core"
+
+if test_green the_production_writer_id_is_one_fixed_constant "$LOG_CORE"; then
+    pass "behaviour test green: the_production_writer_id_is_one_fixed_constant"
+else
+    fail "behaviour test not green: the_production_writer_id_is_one_fixed_constant"
+    tail -n 20 "$LOG_CORE" | sed 's/^/      | /'
+fi
+
+if test_green the_production_seam_uses_the_one_core_writer_id "$LOG_GDEX"; then
+    pass "binding test green: the_production_seam_uses_the_one_core_writer_id"
+else
+    fail "binding test not green: the_production_seam_uses_the_one_core_writer_id"
+fi
+
+# The literal must be spelled the same way in the core, the probe and here, or
+# the three would disagree about who owns the channel.
+core_id="$(sed -n 's/^pub const EXTERNAL_DRIVER_ID: &str = "\([^"]*\)".*/\1/p' "$WEATHER_SRC" | head -1)"
+if [ "$core_id" = "$EXTERNAL_WRITER" ]; then
+    pass "remich_core declares EXTERNAL_DRIVER_ID = '$EXTERNAL_WRITER'"
+else
+    fail "remich_core declares EXTERNAL_DRIVER_ID = '$core_id', expected '$EXTERNAL_WRITER'"
+fi
+
+if grep -qF "const EXTERNAL_WRITER := \"$EXTERNAL_WRITER\"" "$EXTERNAL_PROBE_GD"; then
+    pass "the engine probe asserts the same id: $EXTERNAL_WRITER"
+else
+    fail "the engine probe does not assert the id $EXTERNAL_WRITER"
+fi
+
+# --------------------------------- 7. the two identities share ONE channel
+header "7. The two identities alternate on one channel; neither displaces the other"
+
+if test_green the_two_identities_alternate_on_one_channel_and_never_both_hold_it "$LOG_CORE"; then
+    pass "behaviour test green: the_two_identities_alternate_on_one_channel_and_never_both_hold_it"
+else
+    fail "behaviour test not green: the_two_identities_alternate_on_one_channel_and_never_both_hold_it"
+    tail -n 20 "$LOG_CORE" | sed 's/^/      | /'
+fi
+
+# Structural half: there is still exactly one channel type, and it is the one
+# the stand-in already used. A parallel channel would mean a second type.
+channels="$(grep -cE '^pub struct WeatherChannel' "$WEATHER_SRC" 2>/dev/null || true)"
+if [ "$channels" = "1" ]; then
+    pass "remich_core declares exactly one WeatherChannel — no parallel channel"
+else
+    fail "remich_core declares $channels WeatherChannel types; exactly one is allowed"
+fi
+
+# ------------------------------------------- 8. tick ownership is preserved
+header "8. An external publish stores the supplied snapshot and tick verbatim"
+
+if test_green an_external_publish_stores_the_supplied_snapshot_and_tick_verbatim "$LOG_CORE"; then
+    pass "behaviour test green: an_external_publish_stores_the_supplied_snapshot_and_tick_verbatim"
+else
+    fail "behaviour test not green: an_external_publish_stores_the_supplied_snapshot_and_tick_verbatim"
+fi
+
+if test_green the_production_publish_preserves_the_supplied_tick_exactly "$LOG_GDEX"; then
+    pass "binding test green: the_production_publish_preserves_the_supplied_tick_exactly"
+else
+    fail "binding test not green: the_production_publish_preserves_the_supplied_tick_exactly"
+fi
+
+# ------------------------------------------- 9. validation is still the gate
+header "9. Invalid values are refused and the last valid snapshot survives"
+
+for test_name in \
+    an_invalid_external_snapshot_is_refused_and_keeps_the_last_valid_one \
+    non_finite_and_negative_values_are_refused_and_leave_the_snapshot_unchanged
+do
+    if test_green "$test_name" "$LOG_CORE"; then
+        pass "core test green: $test_name"
+    else
+        fail "core test not green: $test_name"
+    fi
+done
+
+if test_green the_production_publish_refuses_invalid_values_and_keeps_the_last_snapshot "$LOG_GDEX"; then
+    pass "binding test green: the_production_publish_refuses_invalid_values_and_keeps_the_last_snapshot"
+else
+    fail "binding test not green: the_production_publish_refuses_invalid_values_and_keeps_the_last_snapshot"
+fi
+
+# ------------------------------- 10-11. the one-writer rule still bites
+header "10-11. A second writer is refused, and the stand-in cannot be bypassed"
+
+for test_name in \
+    a_second_distinct_writer_is_refused_on_the_production_channel \
+    a_second_distinct_writer_claim_is_refused_with_the_conflict_named \
+    a_second_writer_publish_is_refused_and_the_snapshot_is_unchanged
+do
+    if test_green "$test_name" "$LOG_CORE"; then
+        pass "core refusal test green: $test_name"
+    else
+        fail "core refusal test not green: $test_name"
+    fi
+done
+
+for test_name in \
+    the_production_channel_still_refuses_a_second_writer \
+    the_production_publish_cannot_bypass_a_stand_in_owner
+do
+    if test_green "$test_name" "$LOG_GDEX"; then
+        pass "binding refusal test green: $test_name"
+    else
+        fail "binding refusal test not green: $test_name"
+    fi
+done
+
+# ------------------------------------------ 12. the stand-in mode is intact
+header "12. The stand-in mode still owns its channel and drives whole cycles"
+
+if test_green the_stand_in_mode_still_owns_its_channel_and_drives_whole_cycles "$LOG_GDEX"; then
+    pass "binding test green: the_stand_in_mode_still_owns_its_channel_and_drives_whole_cycles"
+else
+    fail "binding test not green: the_stand_in_mode_still_owns_its_channel_and_drives_whole_cycles"
+fi
+
+# The pre-existing stand-in regressions must all still be green — this seam
+# changed the binding's RemichWeather, so they are re-proved here rather than
+# assumed.
+for test_name in \
+    weather_channel_starts_with_no_writer \
+    the_first_writer_claims_and_publishes \
+    re_claiming_the_same_writer_keeps_the_same_owner \
+    readers_obtain_the_snapshot_without_becoming_writers \
+    the_stand_in_refuses_a_channel_owned_by_another_writer \
+    the_stand_in_is_deterministic_from_seed_and_tick \
+    the_seed_participates_in_the_stand_in_direction \
+    driving_publishes_the_world_tick_it_was_given \
+    the_stand_in_driver_holds_no_time_state \
+    the_weather_source_accumulates_no_time_and_uses_no_entropy_source \
+    the_wind_vector_reads_the_snapshot_and_the_tick_only \
+    the_motion_phase_is_presentation_from_the_integer_tick \
+    the_binding_uses_the_real_setter_and_no_getter
+do
+    if test_green "$test_name" "$LOG_CORE" || test_green "$test_name" "$LOG_GDEX"; then
+        pass "pre-existing weather test still green: $test_name"
+    else
+        fail "pre-existing weather test regressed: $test_name"
+    fi
+done
+
+# ------------------------------- 13. one whole-snapshot publish, no setters
+header "13. The binding exposes one whole-snapshot publish and no unrestricted setters"
+
+if test_green the_production_publish_is_one_validated_whole_snapshot "$LOG_GDEX"; then
+    pass "binding test green: the_production_publish_is_one_validated_whole_snapshot"
+else
+    fail "binding test not green: the_production_publish_is_one_validated_whole_snapshot"
+    tail -n 20 "$LOG_GDEX" | sed 's/^/      | /'
+fi
+
+# The probe asserts the same absences from the engine side.
+for callable in set_wind set_rain set_temperature set_light set_snapshot set_tick publish; do
+    if grep -qF "\"$callable\"" "$EXTERNAL_PROBE_GD"; then
+        pass "the engine probe asserts '$callable' is absent from the class"
+    else
+        fail "the engine probe does not assert '$callable' is absent"
+    fi
+done
+
+# The publish still goes through the one-writer channel API, not around it.
+if grep -qF 'channel.publish(EXTERNAL_DRIVER_ID, snapshot)?;' "$GDEX_SRC"; then
+    pass "the production publish goes through WeatherChannel::publish as $EXTERNAL_WRITER"
+else
+    fail "the production publish does not go through WeatherChannel::publish"
+fi
+
+if grep -qF 'channel.claim_writer(EXTERNAL_DRIVER_ID)' "$GDEX_SRC"; then
+    pass "external initialization goes through WeatherChannel::claim_writer"
+else
+    fail "external initialization does not go through WeatherChannel::claim_writer"
+fi
+
+# ---------------------------------------------- 14. the seam holds no clock
+header "14. The production seam holds no clock of its own"
+
+if test_green the_production_publish_preserves_the_supplied_tick_exactly "$LOG_GDEX"; then
+    pass "the seam's own source scan (delta, wall time, counter, second clock) is green"
+else
+    fail "the production seam's source scan failed"
+fi
+
+# The shared clock is still the only clock authority, and the seam did not add
+# one: the external project declares no clock autoload of its own.
+ext_autoloads="$(grep -cE '^[A-Za-z]+Clock=' "${EXTERNAL_DIR}/project.godot" 2>/dev/null || true)"
+if [ "$ext_autoloads" = "0" ]; then
+    pass "the external project declares no clock autoload — the seam takes a tick, it makes none"
+else
+    fail "the external project declares $ext_autoloads clock autoloads; it must declare none"
+fi
+
+# ------------------------------------- 15. the existing readers are unchanged
+header "15. The existing readers still read the one channel in either mode"
+
+for reader in snapshot writer_id writer_status apply_wind; do
+    if grep -qE "^[[:space:]]*fn ${reader}\(" "$GDEX_SRC"; then
+        pass "the reader '$reader' is still a method of RemichWeather"
+    else
+        fail "the reader '$reader' is no longer a method of RemichWeather"
+    fi
+done
+
+# apply_wind reads the channel in both modes — it must not require the stand-in.
+# Read the whole function (to the next method at the same indent), not just the
+# first brace, or a guard clause would look like the entire body.
+apply_body="$(awk '
+    /^[[:space:]]*fn apply_wind\(/ { inside = 1 }
+    inside && /^    #\[func\]$/ && seen { inside = 0 }
+    inside { print; seen = 1 }
+' "$GDEX_SRC" 2>/dev/null)"
+if printf '%s' "$apply_body" | grep -q 'EXTERNAL_PRESENTATION_CYCLE'; then
+    pass "apply_wind handles the external mode's declared presentation cycle"
+else
+    fail "apply_wind does not handle the external mode"
+fi
+if printf '%s' "$apply_body" | grep -q 'channel.read()'; then
+    pass "apply_wind reads the one channel's latest snapshot"
+else
+    fail "apply_wind does not read the channel"
+fi
+# It must not demand the stand-in: the old body took `Some(stand_in)` as a
+# precondition, which is exactly what made it unavailable to the seam.
+if printf '%s' "$apply_body" | grep -qE 'Some\(channel\), *Some\(stand_in\)'; then
+    fail "apply_wind still requires a stand-in driver; it must work in either mode"
+else
+    pass "apply_wind no longer requires a stand-in driver"
+fi
+
+# ------------------------------------ 16. the committed fixture is unchanged
+header "16. The committed stand-in fixture was not converted into production policy"
+
+for frozen in "$FIXTURE_WEATHER_GD" "$FIXTURE_PROBE_GD" "godot/project.godot"; do
+    if git diff --quiet "$BASE_SHA" -- "$frozen" 2>/dev/null; then
+        pass "$frozen is byte-for-byte unchanged since the base"
+    else
+        fail "$frozen changed — the stand-in fixture must keep its existing acceptance"
+        git diff --stat "$BASE_SHA" -- "$frozen" | sed 's/^/      | /'
+    fi
+done
+
+# The fixture's own stand-in initialization is still what its _ready() calls.
+if grep -qF 'created.call("initialize", TEST_SEED, TEST_CYCLE_LENGTH)' "$FIXTURE_WEATHER_GD"; then
+    pass "the fixture still initializes the stand-in schedule in _ready()"
+else
+    fail "the fixture's stand-in initialization is gone"
+fi
+
+# ----------------------------------------- 17-23. the real engine acceptance
+header "17. The seam runs through the real GDExtension in pinned Godot"
+
+if [ -x "$GODOT_BIN" ]; then
+    pass "the pinned engine exists at the qualified path"
+    godot_version="$("$GODOT_BIN" --version 2>/dev/null | tail -n 1)"
+    case "$godot_version" in
+        4.7.2*) pass "pinned Godot --version: $godot_version" ;;
+        *) fail "pinned Godot --version is '$godot_version', expected 4.7.2" ;;
+    esac
+else
+    fail "the pinned engine is missing at $GODOT_BIN"
+fi
+
+# Every engine invocation in tools/ must be headless and never enter editor,
+# import or export mode.
+invocations="$(grep -rnE '\$GODOT_BIN"[[:space:]]+([-"$])' tools/*.sh 2>/dev/null \
+    | grep -vF -- '--version' || true)"
+engine_mode_problems=""
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    case "$line" in
+        *--headless*)
+            case "$line" in
+                *--editor*|*--export*|*--import*|*--project-manager*)
+                    engine_mode_problems="$engine_mode_problems$line
+"
+                    ;;
+            esac
+            ;;
+        *) engine_mode_problems="$engine_mode_problems$line
+" ;;
+    esac
+done <<<"$invocations"
+if [ -z "$invocations" ]; then
+    fail "no engine run found in tools/ — the qualified proof path is missing"
+elif [ -z "$engine_mode_problems" ]; then
+    pass "every engine run in tools/ is headless, with no editor/import/export mode"
+else
+    fail "an engine run is not headless, or enters a forbidden mode:"
+    printf '%s' "$engine_mode_problems" | sed 's/^/      | /'
+fi
+
+if [ "$RUN_RC" -eq 0 ]; then
+    pass "bash $RUN_EXTERNAL exits 0"
+else
+    fail "bash $RUN_EXTERNAL exited $RUN_RC:"
+    tail -n 25 "$LOG_RUN" | sed 's/^/      | /'
+fi
+
+# The committed bridge revision is untouched: this seam is not a revision bump.
+rev="$(sed -n 's/^[[:space:]]*pub const WEATHER_BRIDGE_REV: &str = "\([^"]*\)".*/\1/p' "$GDEX_SRC" 2>/dev/null)"
+rev="${rev%%$'\n'*}"
+if [ "$rev" = "$COMMITTED_WEATHER_REV" ]; then
+    pass "WEATHER_BRIDGE_REV holds its committed value ('$rev')"
+else
+    fail "WEATHER_BRIDGE_REV is '$rev', expected '$COMMITTED_WEATHER_REV'"
+fi
+
+if grep -q "REMICH_EXTERNAL_WEATHER_OK" "$LOG_RUN" 2>/dev/null; then
+    pass "REMICH_EXTERNAL_WEATHER_OK observed in the engine run"
+    grep -h '^REMICH_EXTERNAL_WEATHER_OK' "$LOG_RUN" | sed 's/^/      | /'
+else
+    fail "no REMICH_EXTERNAL_WEATHER_OK marker in the engine run"
+    tail -n 25 "$LOG_RUN" | sed 's/^/      | /'
+fi
+
+if grep -q 'REMICH_EXTERNAL_WEATHER_FAIL' "$LOG_RUN" 2>/dev/null; then
+    fail "the engine run reported a failure marker:"
+    grep -h 'REMICH_EXTERNAL_WEATHER_FAIL' "$LOG_RUN" | sed 's/^/      | /'
+else
+    pass "no REMICH_EXTERNAL_WEATHER_FAIL in the engine run"
+fi
+
+# The refusals the probe provokes are printed by Rust, verbatim, in the log.
+for expected in \
+    "weather field 'wind_dir_x' must be a finite number" \
+    "weather field 'rain' must be a finite number" \
+    "weather field 'temperature' must be a finite number" \
+    "wind strength must be a non-negative number"
+do
+    if grep -qF "$expected" "$LOG_RUN"; then
+        pass "the engine run refused an invalid value: $expected"
+    else
+        fail "the engine run did not refuse: $expected"
+    fi
+done
+
+header "18-23. What the engine run proved, read from its own log"
+
+# 18. the one channel is claimed for the production writer, not the stand-in.
+conflict_line="$(grep -h "writer 'intruder-weather-driver' was refused" "$LOG_RUN" 2>/dev/null | head -1)"
+if [ -n "$conflict_line" ]; then
+    pass "in-engine refusal observed: a distinct second writer was refused by name"
+    note "$(printf '%s' "$conflict_line" | sed 's/^ERROR: //')"
+    if printf '%s' "$conflict_line" | grep -qF "owned by '$EXTERNAL_WRITER'"; then
+        pass "the refused writer was refused because '$EXTERNAL_WRITER' holds the one channel"
+    else
+        fail "the in-engine refusal does not name $EXTERNAL_WRITER as the owner"
+    fi
+else
+    fail "the engine run shows no named second-writer refusal"
+fi
+
+if grep -q "RemichWeather: writer-conflict" "$LOG_RUN" 2>/dev/null; then
+    pass "the refusal came from the one-writer rule (writer-conflict), through the channel API"
+else
+    fail "the in-engine refusal did not come from the one-writer rule"
+fi
+
+# 22. drive(tick) is refused in external mode rather than generating stand-in.
+if grep -q "RemichWeather: no-stand-in-driver" "$LOG_RUN" 2>/dev/null; then
+    pass "drive(tick) was refused in external mode — no stand-in weather was generated"
+else
+    fail "drive(tick) was not refused in external mode"
+fi
+
+# 19-21. The probe's own assertions ran: a green marker means every one passed.
+# Re-derive the count so the claim is checked, not assumed.
+probe_assertions="$(grep -c '_fail(' "$EXTERNAL_PROBE_GD" 2>/dev/null || true)"
+if [ "${probe_assertions:-0}" -ge 15 ]; then
+    pass "the engine probe carries $probe_assertions refusal assertions"
+else
+    fail "the engine probe carries only $probe_assertions refusal assertions; it looks thin"
+fi
+
+# The published values must be the ones the probe declares — a probe that
+# published nothing and asserted nothing must not pass.
+for declared in "const TICK := 137" "const WIND_STRENGTH := 0.42" "const RAIN := 0.25"; do
+    if grep -qF "$declared" "$EXTERNAL_PROBE_GD"; then
+        pass "the engine probe publishes a known complete snapshot: $declared"
+    else
+        fail "the engine probe does not declare $declared"
+    fi
+done
+
+# The reader is the existing one: the probe must not have added a private read.
+if grep -qF 'created.call("snapshot")' "$EXTERNAL_PROBE_GD" \
+        && grep -qF 'created.call("writer_status")' "$EXTERNAL_PROBE_GD" \
+        && grep -qF 'created.call("apply_wind")' "$EXTERNAL_PROBE_GD"; then
+    pass "the probe reads back through the existing snapshot, writer_status and apply_wind"
+else
+    fail "the probe does not read back through the existing readers"
+fi
+
+# --------------------------------- 24. the existing weather acceptance holds
+header "24. The committed Phase 2 Step 2 weather acceptance still runs unchanged"
+
+# Its checker is unmodified by this change, which is what "unchanged" means
+# here: the stand-in fixture's own acceptance is the same proof as before.
+if git diff --quiet "$BASE_SHA" -- "$STEP2_CHECKER" 2>/dev/null; then
+    pass "$STEP2_CHECKER is byte-for-byte unchanged since the base"
+else
+    fail "$STEP2_CHECKER changed — the stand-in acceptance must run unchanged"
+    git diff --stat "$BASE_SHA" -- "$STEP2_CHECKER" | sed 's/^/      | /'
+fi
+
+# Its own result, with the pre-existing failures named rather than hidden.
+step2_oks="$(grep -c '^ok' "$LOG_STEP2" 2>/dev/null || true)"
+step2_fails="$(grep -c '^FAIL' "$LOG_STEP2" 2>/dev/null || true)"
+note "tools/check_phase2_step2.sh at this head: $step2_oks ok / ${step2_fails:-0} FAIL"
+note "the same checker on the base SHA 79e5d73 recorded 92 ok / 8 FAIL (see the PR evidence)"
+
+# The eight failures that predate this change, by their exact text. They have
+# two causes, neither of them a weather fact: the lane's closing record moved
+# docs/PLAN.md after the chain checkers froze it (so PLAN_FREEZE is stale and
+# the Step 1 sub-check is red, which cascades into the marker checks), and the
+# Grengewald worktree has untracked local files. Any FAIL line outside this set
+# is this change's, and is reported as such rather than folded in.
+#
+# Kept as exact strings, not a loose pattern, so a genuinely new failure
+# cannot hide behind one of them.
+PREEXISTING_STEP2_FAILURES="
+bash tools/check_phase2_step1.sh failed:
+a frozen checker or the plan changed beyond the Remich #9 authorization:
+donor code/data, provenance or the plan changed beyond the Remich #9 authorization:
+Step 1 sub-check log: no REMICH_CLOCK_OK marker (or the sub-check itself failed)
+Step 1 sub-check log: no REMICH_SCORER_OK marker (or the sub-check itself failed)
+Step 1 sub-check log: no REMICH_DECAY_OK marker (or the sub-check itself failed)
+Step 1 sub-check log: no REMICH_BRIDGE_OK marker (or the sub-check itself failed)
+Grengewald is dirty — this step must not modify it
+Phase 2 Step 2 — 8 check(s) failed
+"
+
+unexpected_step2=""
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    # The final summary line restates the count, so compare it separately.
+    case "$line" in
+        "FAIL  Phase 2 Step 2 — "*)
+            if ! printf '%s\n' "$PREEXISTING_STEP2_FAILURES" \
+                | grep -qxF "$line"; then
+                unexpected_step2="$unexpected_step2$line
+"
+            fi
+            continue
+            ;;
+    esac
+    if ! printf '%s\n' "$PREEXISTING_STEP2_FAILURES" | grep -qxF "FAIL  $line"; then
+        unexpected_step2="$unexpected_step2$line
+"
+    fi
+done <<<"$(grep '^FAIL' "$LOG_STEP2" 2>/dev/null || true)"
+
+if [ -z "$unexpected_step2" ]; then
+    pass "every Step 2 failure is byte-identical to the set already failing on the base SHA"
+else
+    fail "this change introduced new Step 2 failures:"
+    printf '%s' "$unexpected_step2" | sed 's/^/      | /'
+fi
+
+# The weather-specific half of that run must be green — the marker proves the
+# stand-in path still works end to end.
+if grep -qE '^REMICH_WEATHER_OK seed=[0-9]+ ticks=[0-9]+ writer=stand-in-weather-schedule' "$LOG_STEP2"; then
+    pass "the stand-in weather run still succeeds through the unchanged fixture"
+    grep -h '^REMICH_WEATHER_OK ' "$LOG_STEP2" | head -1 | sed 's/^/      | /'
+else
+    fail "the stand-in weather run did not succeed (REMICH_WEATHER_OK missing)"
+fi
+
+# ------------------------------------------ 25. no generated state is tracked
+header "25. No generated trace, staging or build state is tracked"
+
+generated="$(git ls-files \
+    | grep -E '(^|/)(target|\.godot|staging)(/|$)|\.so$|\.dylib$|\.dll$|_expectation\.txt$|\.jsonl$' \
+    || true)"
+if [ -z "$generated" ]; then
+    pass "no build, import, library, expectation or trace file is tracked"
+else
+    fail "generated state is tracked by git:"
+    printf '%s\n' "$generated" | sed 's/^/      | /'
+fi
+
+for ignored in godot_external_weather/external_weather_probe_expectation.txt \
+        godot_external_weather/.godot/extension_list.cfg; do
+    if git check-ignore -q "$ignored"; then
+        pass "generated state is ignored: $ignored"
+    else
+        fail "generated state is not ignored: $ignored"
+    fi
+done
+
+# --------------------------------------- 26. no other repository was modified
+header "26. No other repository was modified"
+
+# Grengewald is read-only to this seam (standing ruling 1) and already carries
+# untracked files from another lane's Godot runs, so its worktree state is
+# reported rather than failed. Its HEAD is still checked.
+DIRTY_REPO_KNOWN_DIRTY="Grengewald"
+
+for repo in Munshausen Larochette Eisleck Grengewald Marnach; do
+    dir="/home/mrg/Documents/Project/$repo"
+    if [ -d "$dir" ] && [ -e "$dir/.git" ]; then
+        if [ -z "$(git -C "$dir" status --porcelain 2>/dev/null | head -5)" ]; then
+            pass "$repo is untouched (clean)"
+        elif [ "$repo" = "$DIRTY_REPO_KNOWN_DIRTY" ]; then
+            # Grengewald carries untracked .uid files from another lane's Godot
+            # runs. This seam reads nothing from that repository and writes
+            # nothing to it, so the state is reported rather than treated as
+            # this change's doing — and the pinned commit is checked instead,
+            # which is what standing ruling 1 actually requires.
+            note "$repo has pre-existing untracked files (not this seam's doing):"
+            git -C "$dir" status --porcelain 2>/dev/null | head -3 | sed 's/^/      | /'
+            pass "$repo's HEAD is unchanged: $(git -C "$dir" rev-parse --short HEAD 2>/dev/null)"
+        else
+            fail "$repo is dirty — this seam must not modify it"
+            git -C "$dir" status --porcelain 2>/dev/null | head -3 | sed 's/^/      | /'
+        fi
+    fi
+done
+
+# The only external path this repository may name is the pinned engine.
+refs="$(grep -rhoE '/home/mrg/Documents/Project/[A-Za-z0-9._-]+' \
+    --include='*.rs' --include='*.toml' --include='*.gd' --include='*.gdextension' \
+    --include='*.gdshader' --include='*.md' --include='*.sh' --include='*.py' \
+    --include='*.json' . 2>/dev/null | sort -u)"
+unexpected=""
+while IFS= read -r ref; do
+    [ -z "$ref" ] && continue
+    case "$ref" in
+        "/home/mrg/Documents/Project/Yolanda") ;;
+        "/home/mrg/Documents/Project/buggy-vault") ;;
+        *) unexpected="$unexpected$ref
+" ;;
+    esac
+done <<<"$refs"
+if [ -z "$unexpected" ]; then
+    pass "the only external paths named are the pinned engine and the donor vault"
+else
+    fail "this repository references another repository by path:"
+    printf '%s' "$unexpected" | sed 's/^/      | /'
+fi
+
+# ------------------------------------------------------------ 27. clean head
+header "27. The worktree is clean at this head"
+
+# The acceptance is run at a committed head, so the change under test is the
+# whole diff rather than a partly-staged one. Untracked files that are this
+# change's own new sources are committed before the run; what must be absent
+# is anything left over afterwards.
+stray="$(git status --porcelain 2>/dev/null)"
+if [ -z "$stray" ]; then
+    pass "no modified, staged or untracked file remains"
+else
+    fail "the worktree is not clean at the acceptance head:"
+    printf '%s\n' "$stray" | sed 's/^/      | /'
+fi
+
+# ------------------------------------------------------------------ summary
+printf '\n========================================\n'
+if [ "$failures" -eq 0 ]; then
+    printf 'PASS  Remich #19 — the one weather channel, externally driven\n'
+    printf '========================================\n'
+    exit 0
+fi
+printf 'FAIL  Remich #19 — %d check(s) failed\n' "$failures"
+printf '========================================\n'
+exit 1

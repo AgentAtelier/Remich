@@ -13,6 +13,7 @@
 /godot/clock_probe_expectation.txt
 /godot/weather_probe_expectation.txt
 /godot/save_probe_expectation.txt
+/godot_external_weather/external_weather_probe_expectation.txt
 
 # The step-5 day harness's runtime trace (REMICH_DAY_TRACE_PATH). Generated
 # state, never committed: the acceptance writes these under /tmp, and this
