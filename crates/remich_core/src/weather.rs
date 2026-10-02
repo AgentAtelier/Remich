@@ -39,6 +39,23 @@
 //! publish must come from that owner; a distinct second writer is refused with
 //! [`WeatherError::WriterConflict`], which names both writers. A refused
 //! publish changes nothing: the last valid snapshot survives untouched.
+//!
+//! ## Two named writer identities, one generic channel (Remich issue #19)
+//!
+//! This module names the two identities Remich's own built-in paths use:
+//! [`STAND_IN_DRIVER_ID`], the fixture schedule, and [`EXTERNAL_DRIVER_ID`],
+//! the one production driver that decides the weather outside this crate.
+//! They are alternatives on the **same** channel, never two channels — the
+//! first claim stands and the other is refused. This module does not implement
+//! the production driver: it holds the identity the binding claims, so a
+//! gameplay caller cannot name a different one.
+//!
+//! That is a statement about *Remich's* two paths, not a restriction on the
+//! channel. [`WeatherChannel`] remains the generic one-writer primitive:
+//! [`WeatherChannel::claim_writer`] deliberately accepts any non-empty
+//! identity, which is how the conflict probes and tests above observe a second
+//! writer being refused. What fixes the *production* identity is the binding
+//! path, which claims it from the constant — not a whitelist in the channel.
 
 use std::fmt;
 
@@ -47,6 +64,22 @@ use serde::{Deserialize, Serialize};
 /// The one stand-in driver's writer identity (docs/PLAN.md §4a, step 2: the
 /// driver now is a stand-in schedule, to be replaced by Eisleck).
 pub const STAND_IN_DRIVER_ID: &str = "stand-in-weather-schedule";
+
+/// The one **production** weather driver's writer identity (Remich issue #19).
+///
+/// The production seam. Remich keeps owning the channel and the integer game
+/// clock; the external At Dusk driver (Eisleck) owns *deciding* the weather and
+/// publishes complete snapshots here. This is the identity the production
+/// **binding path** claims: the value is a constant, never a parameter, so no
+/// gameplay caller can choose a production writer id, and a second distinct
+/// identity is still refused by [`WeatherChannel::claim_writer`] with
+/// [`WeatherError::WriterConflict`]. The channel itself stays generic and
+/// accepts any non-empty identity.
+///
+/// The spelling is fixed here once and asserted by the tests in this module
+/// and by the binding. It is the name the issue (#19) uses for the same
+/// driver, so the issue, the source and the acceptance all say one thing.
+pub const EXTERNAL_DRIVER_ID: &str = "eislek-weather-driver";
 
 // --- the stand-in schedule's fixture values ---------------------------------
 // Remich test-fixture semantics (replaceable, not Eisleck policy):
@@ -622,6 +655,199 @@ mod tests {
     #[test]
     fn a_zero_cycle_length_is_refused() {
         assert_eq!(StandInWeather::new(1, 0), Err(WeatherError::ZeroCycleLength));
+    }
+
+    // ------------------------- the production seam's one writer identity
+
+    /// The production writer id is a fixed constant, chosen once and spelled
+    /// the same way here, in the binding and in the acceptance. It is
+    /// declared `const` in this module, so no caller can hand a different
+    /// production identity to the channel: the value is not derived, not
+    /// parameterised and not looked up.
+    #[test]
+    fn the_production_writer_id_is_one_fixed_constant() {
+        assert_eq!(EXTERNAL_DRIVER_ID, "eislek-weather-driver");
+        assert_ne!(
+            EXTERNAL_DRIVER_ID, STAND_IN_DRIVER_ID,
+            "the two identities must be distinct, or the one-writer rule could not speak"
+        );
+        // It is a `const &str` in this module, not a value produced here.
+        let source = include_str!("weather.rs");
+        for declaration in [
+            "pub const EXTERNAL_DRIVER_ID: &str =",
+            "pub const STAND_IN_DRIVER_ID: &str =",
+        ] {
+            assert!(
+                source.contains(declaration),
+                "the identity must be declared as a constant: '{declaration}'"
+            );
+        }
+    }
+
+    /// External mode and stand-in mode are alternatives on **one** channel,
+    /// not two channels: whichever identity claims first keeps it, and the
+    /// other is refused by the same rule as any second writer.
+    #[test]
+    fn the_two_identities_alternate_on_one_channel_and_never_both_hold_it() {
+        // External first: the stand-in cannot take the channel afterwards.
+        let mut external = WeatherChannel::new();
+        external
+            .claim_writer(EXTERNAL_DRIVER_ID)
+            .expect("the production driver claims the one channel");
+        assert_eq!(external.writer_id(), Some(EXTERNAL_DRIVER_ID));
+
+        let stand_in = stand_in(60628);
+        assert!(
+            matches!(
+                stand_in.attach(&mut external),
+                Err(WeatherError::WriterConflict { .. })
+            ),
+            "the stand-in must not displace the production driver"
+        );
+        assert!(
+            matches!(
+                stand_in.drive(&mut external, 5),
+                Err(WeatherError::WriterConflict { .. })
+            ),
+            "the stand-in must not publish on a channel it does not own"
+        );
+        assert_eq!(external.read(), None, "nothing was published");
+        assert_eq!(external.writer_id(), Some(EXTERNAL_DRIVER_ID));
+
+        // Stand-in first: the production identity is refused the same way.
+        let (stand_in, mut fixture) = attached_at(60628, 130);
+        let before = fixture.read().expect("the fixture published");
+        assert!(
+            matches!(
+                fixture.claim_writer(EXTERNAL_DRIVER_ID),
+                Err(WeatherError::WriterConflict { .. })
+            ),
+            "the production identity must not displace the stand-in either"
+        );
+        assert_eq!(fixture.read(), Some(before));
+        assert_eq!(fixture.writer_id(), Some(STAND_IN_DRIVER_ID));
+        assert_eq!(stand_in.cycle_length(), TEST_CYCLE);
+    }
+
+    /// The production seam publishes exactly the snapshot it is handed: the
+    /// tick is a label the caller supplies, and the six weather values are
+    /// stored verbatim. Out-of-order and large ticks come back unchanged, so
+    /// nothing here advances, interpolates or invents a tick.
+    #[test]
+    fn an_external_publish_stores_the_supplied_snapshot_and_tick_verbatim() {
+        let mut channel = WeatherChannel::new();
+        channel
+            .claim_writer(EXTERNAL_DRIVER_ID)
+            .expect("the production driver claims the channel");
+
+        // Deliberately not ascending, and not starting at zero: a clock, an
+        // accumulator or an interpolator could not produce this sequence.
+        for tick in [4096u64, 7, 0, 1, 999_999] {
+            let published = WeatherSnapshot::new(tick, 0.6, 0.8, 0.42, 0.25, 7.5, 0.33)
+                .expect("the decided snapshot is valid");
+            channel
+                .publish(EXTERNAL_DRIVER_ID, published)
+                .expect("the owner publishes");
+            let read = channel.read().expect("published");
+            assert_eq!(read, published, "the snapshot is stored verbatim");
+            assert_eq!(read.tick, tick, "the exact tick supplied is preserved");
+        }
+        assert_eq!(channel.writer_id(), Some(EXTERNAL_DRIVER_ID));
+    }
+
+    /// The seam is refused exactly as the fixture's is: a distinct second
+    /// writer cannot claim or publish, and its attempt leaves the last valid
+    /// externally published snapshot byte-for-byte intact.
+    #[test]
+    fn a_second_distinct_writer_is_refused_on_the_production_channel() {
+        let mut channel = WeatherChannel::new();
+        channel
+            .claim_writer(EXTERNAL_DRIVER_ID)
+            .expect("the production driver claims the channel");
+        let published = WeatherSnapshot::new(137, 0.6, 0.8, 0.42, 0.25, 7.5, 0.33)
+            .expect("the decided snapshot is valid");
+        channel
+            .publish(EXTERNAL_DRIVER_ID, published)
+            .expect("the owner publishes");
+
+        let forged = WeatherSnapshot::new(138, -1.0, 0.0, 9.0, 1.0, 30.0, 1.0)
+            .expect("a valid snapshot, refused purely on ownership");
+        let publish = channel.publish("some-gameplay-script", forged);
+        match publish {
+            Err(WeatherError::WriterConflict { held_by, attempted }) => {
+                assert_eq!(held_by, EXTERNAL_DRIVER_ID, "the refusal names the owner");
+                assert_eq!(attempted, "some-gameplay-script");
+            }
+            other => panic!("a second distinct writer must be refused, got {other:?}"),
+        }
+        assert!(
+            matches!(
+                channel.claim_writer("some-gameplay-script"),
+                Err(WeatherError::WriterConflict { .. })
+            ),
+            "a second distinct claim must be refused too"
+        );
+        assert_eq!(channel.read(), Some(published), "the snapshot is untouched");
+        assert_eq!(channel.writer_id(), Some(EXTERNAL_DRIVER_ID));
+    }
+
+    /// An invalid decided snapshot never enters the channel, and the refusal
+    /// costs the caller nothing: the last valid one is still there.
+    #[test]
+    fn an_invalid_external_snapshot_is_refused_and_keeps_the_last_valid_one() {
+        let mut channel = WeatherChannel::new();
+        channel
+            .claim_writer(EXTERNAL_DRIVER_ID)
+            .expect("the production driver claims the channel");
+        let good = WeatherSnapshot::new(137, 0.6, 0.8, 0.42, 0.25, 7.5, 0.33)
+            .expect("valid");
+        channel.publish(EXTERNAL_DRIVER_ID, good).expect("published");
+
+        for (fields, expected) in [
+            (
+                [0.6, 0.8, 0.42, f64::NAN, 7.5, 0.33],
+                WeatherError::NonFinite { field: "rain" },
+            ),
+            (
+                [0.6, 0.8, 0.42, 0.25, f64::INFINITY, 0.33],
+                WeatherError::NonFinite {
+                    field: "temperature",
+                },
+            ),
+            (
+                [f64::NAN, 0.8, 0.42, 0.25, 7.5, 0.33],
+                WeatherError::NonFinite {
+                    field: "wind_dir_x",
+                },
+            ),
+            (
+                [0.6, 0.8, -0.1, 0.25, 7.5, 0.33],
+                WeatherError::NegativeWindStrength,
+            ),
+        ] {
+            let built = WeatherSnapshot::new(
+                138,
+                fields[0],
+                fields[1],
+                fields[2],
+                fields[3],
+                fields[4],
+                fields[5],
+            );
+            assert_eq!(built, Err(expected), "an invalid snapshot is refused");
+            // ...and a struct literal bypassing `new` is refused on publish.
+            let bypass = WeatherSnapshot {
+                tick: 138,
+                wind_dir_x: fields[0],
+                wind_dir_z: fields[1],
+                wind_strength: fields[2],
+                rain: fields[3],
+                temperature: fields[4],
+                light: fields[5],
+            };
+            assert!(channel.publish(EXTERNAL_DRIVER_ID, bypass).is_err());
+            assert_eq!(channel.read(), Some(good), "the last valid snapshot stands");
+        }
     }
 
     // ------------------------------------------------ the stand-in schedule

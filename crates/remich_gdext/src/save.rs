@@ -177,7 +177,7 @@ impl RemichGameSave {
         weather.set("cycle_length", loaded.weather.cycle_length as i64);
         weather.set(
             "snapshot",
-            &snapshot_dictionary(&loaded.weather.snapshot, loaded.weather.seed),
+            &snapshot_dictionary(&loaded.weather.snapshot, loaded.weather.seed as i64),
         );
         result.set("weather", &weather);
 

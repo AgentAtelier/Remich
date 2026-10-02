@@ -19,7 +19,8 @@ use remich_core::clock::WorldClock;
 use remich_core::decay::advance_needs;
 use remich_core::scorer::{self, ScorerInput, ScorerOutcome};
 use remich_core::weather::{
-    StandInWeather, WeatherChannel, WeatherError, WeatherSnapshot, STAND_IN_DRIVER_ID,
+    StandInWeather, WeatherChannel, WeatherError, WeatherSnapshot, EXTERNAL_DRIVER_ID,
+    STAND_IN_DRIVER_ID,
 };
 
 // The game's save surface (Phase 2, Step 3): file access and plain-value
@@ -537,10 +538,9 @@ fn clock_failure(code: &str, message: &str) -> VarDictionary {
 // The native object owns the Rust-held channel: one writer, everyone else
 // reads. Godot keeps no second copy of tick, wind, rain, temperature or
 // light — every read here goes straight to `remich_core::weather`, and every
-// publish goes through the stand-in driver that owns the channel. There is
-// no setter for arbitrary weather values: `drive` takes the integer world
-// tick and publishes what the fixture schedule says for that tick, nothing
-// else.
+// publish goes through the driver that owns the channel: the stand-in fixture
+// via `drive`, the production seam via `publish_external_snapshot`. There is
+// no setter for arbitrary weather values in either mode.
 // ---------------------------------------------------------------------------
 
 /// The presentation phase passed to the wind global's W component, in
@@ -559,6 +559,26 @@ fn presentation_phase(tick: u64, cycle_length: u64) -> f64 {
     phase as f64 / cycle_length as f64 * std::f64::consts::TAU
 }
 
+/// The explicit presentation cycle this node's mode declares — `Some` for the
+/// stand-in fixture, `None` for the production seam.
+///
+/// A presentation cycle is *fixture* configuration: it is the stand-in driver's
+/// `cycle_length`, supplied by the test project and never by the weather. The
+/// production seam publishes a snapshot somebody else decided, and an external
+/// weather snapshot carries no motion phase — W is the game-supplied
+/// presentation phase in radians, not weather — so **no** cycle is declared
+/// there and none is borrowed from the fixture.
+///
+/// `None` therefore means "this mode cannot produce a presentation phase", and
+/// the caller refuses rather than inventing one: writing a frozen `0.0`, or the
+/// fixture's cycle, into the real Grengewald motion phase would silently make
+/// production wind animation static. Deciding the production presentation
+/// phase belongs to the later Larochette/Grengewald presentation integration,
+/// not to this weather-channel seam (see `no_presentation_phase_failure`).
+fn presentation_cycle_of(stand_in: Option<&StandInWeather>) -> Option<u64> {
+    stand_in.map(StandInWeather::cycle_length)
+}
+
 /// The exact vector the wind global is written with, derived from the
 /// snapshot: X ← direction X, Y ← direction Z, Z ← wind strength adapted to
 /// Grengewald's gentle 0..1 metre displacement input (the fixture strength
@@ -573,25 +593,94 @@ fn wind_vector(snapshot: &WeatherSnapshot, cycle_length: u64) -> [f64; 4] {
     ]
 }
 
+/// The one production publish operation (Remich issue #19): build a complete
+/// [`WeatherSnapshot`] from the seven plain values the authoritative caller
+/// supplies, and publish it through the already-claimed production writer.
+///
+/// Three things this deliberately is **not**:
+///
+/// * it takes no writer identity — the only identity it can ever publish as
+///   is [`EXTERNAL_DRIVER_ID`], the constant this seam owns, so a gameplay
+///   caller cannot choose a production writer;
+/// * it is one whole snapshot, not per-field setters: there is no
+///   `set_rain`/`set_wind`/`set_temperature`/`set_light` path, so nothing can
+///   assemble a half-weather through the production seam;
+/// * it holds no time: `tick` is the integer tick Remich's one clock
+///   produced and the caller hands in. Nothing here advances a tick, rounds
+///   one, interpolates between two, or decides that a transition happened.
+///   The tick in the stored snapshot is the tick that was passed in.
+///
+/// Validation is the existing [`WeatherSnapshot::new`] and the existing
+/// [`WeatherChannel::publish`] — this function adds no rule of its own, and a
+/// refused publish (invalid values, or a channel this identity does not own,
+/// such as a stand-in-initialized one) leaves the last valid snapshot exactly
+/// as it was.
+fn publish_external_snapshot_through(
+    channel: &mut WeatherChannel,
+    tick: u64,
+    wind_dir_x: f64,
+    wind_dir_z: f64,
+    wind_strength: f64,
+    rain: f64,
+    temperature: f64,
+    light: f64,
+) -> Result<WeatherSnapshot, WeatherError> {
+    let snapshot = WeatherSnapshot::new(
+        tick,
+        wind_dir_x,
+        wind_dir_z,
+        wind_strength,
+        rain,
+        temperature,
+        light,
+    )?;
+    channel.publish(EXTERNAL_DRIVER_ID, snapshot)?;
+    Ok(snapshot)
+}
+
 /// The shared weather node: the one place Godot reaches the Rust-held
 /// snapshot.
 ///
 /// One instance exists in the test project (`godot/weather.gd`, the `Weather`
-/// autoload). `initialize` is the only way in, and it claims the channel for
-/// the stand-in driver — a second initialization is refused rather than
-/// replacing the first. `drive` publishes for a supplied integer world tick
-/// (the ticks come from the shared world clock; this class never advances
-/// time itself), `snapshot`/`writer_status` are plain reads, and
-/// `apply_wind` performs the one live write of the Grengewald wind global
-/// from the current snapshot through the engine's real setter.
+/// autoload). `initialize` and `initialize_external` are the two ways in (see
+/// below). Whichever ran first claims the channel; a second initialization is
+/// refused rather than replacing the first. `drive` publishes for a supplied
+/// integer world tick (the ticks come from the shared world clock; this class
+/// never advances time itself), `publish_external_snapshot` publishes one
+/// complete externally decided snapshot, `snapshot`/`writer_status` are plain
+/// reads, and `apply_wind` performs the one live write of the Grengewald wind
+/// global from the current snapshot through the engine's real setter.
+///
+/// ## Two ways in, one channel (Remich issue #19)
+///
+/// `initialize` is **fixture** behaviour: it claims the channel for
+/// [`STAND_IN_DRIVER_ID`] and brings its schedule with it, so the stand-in
+/// can `drive(tick)`. It is not weather policy and not production.
+///
+/// `initialize_external` is the **production seam**: it claims the *same*
+/// single channel for [`EXTERNAL_DRIVER_ID`] and creates no stand-in at all,
+/// so the weather is decided outside Remich and arrives as whole snapshots
+/// through `publish_external_snapshot`. The two are alternatives on one
+/// instance — the first initialization wins and the second is refused, so
+/// they can never both hold the channel, and neither displaces the other.
+///
+/// These are the two **named** identities Remich's own built-in paths use.
+/// The channel API itself stays generic: `try_claim_writer` deliberately
+/// accepts an arbitrary identity, so acceptance can watch a distinct second
+/// writer be refused. It is this production *binding* path, not the channel,
+/// that fixes the production identity to the constant.
 #[derive(GodotClass)]
 #[class(base = Node)]
 pub struct RemichWeather {
     base: Base<Node>,
     /// The one authoritative weather channel. Created once by
-    /// [`Self::initialize`]; nobody outside it ever mutates weather.
+    /// [`Self::initialize`] or [`Self::initialize_external`]; nobody outside
+    /// it ever mutates weather.
     channel: Option<WeatherChannel>,
     /// The fixture driver that owns the channel (seed + cycle length only).
+    /// `Some` in stand-in mode, `None` in the production seam — which is how
+    /// the two modes are told apart, with no second field and no second
+    /// channel.
     stand_in: Option<StandInWeather>,
     /// Instrumentation: the exact `vec4` handed to the shader-global setter
     /// on the most recent [`Self::apply_wind`], in the setter's own
@@ -653,13 +742,54 @@ impl RemichWeather {
         result
     }
 
-    /// Whether [`Self::initialize`] has succeeded yet.
+    /// The **production seam** (Remich issue #19): creates the one weather
+    /// channel and claims it for [`EXTERNAL_DRIVER_ID`], the one stable
+    /// production writer identity, and creates **no** stand-in driver.
+    ///
+    /// Everything the stand-in mode is, this is not: no schedule, no seed, no
+    /// cycle, and nothing that decides weather. The weather is decided by the
+    /// external driver and arrives as whole snapshots through
+    /// [`Self::publish_external_snapshot`]; Remich keeps owning the channel
+    /// and the integer clock and learns nothing about *how* a snapshot was
+    /// decided.
+    ///
+    /// A second initialization is refused, and so is
+    /// [`Self::initialize`] afterwards: the two modes are alternatives on one
+    /// instance and can never both hold the one channel.
+    #[func]
+    fn initialize_external(&mut self) -> VarDictionary {
+        if self.channel.is_some() {
+            return weather_failure(
+                "already-initialized",
+                "the weather channel is created once, like the clock; stand-in and external \
+                 initialization are alternatives, never both",
+            );
+        }
+        let mut channel = WeatherChannel::new();
+        if let Err(error) = channel.claim_writer(EXTERNAL_DRIVER_ID) {
+            return weather_refusal(&error);
+        }
+        self.channel = Some(channel);
+        self.stand_in = None;
+        self.last_applied = None;
+
+        let mut result = VarDictionary::new();
+        result.set("ok", true);
+        result.set("bridge_rev", WEATHER_BRIDGE_REV);
+        result.set("writer", EXTERNAL_DRIVER_ID);
+        result
+    }
+
+    /// Whether [`Self::initialize`] or [`Self::initialize_external`] has
+    /// succeeded yet.
     #[func]
     fn is_initialized(&self) -> bool {
         self.channel.is_some()
     }
 
-    /// The stand-in driver's seed. `-1` before initialization.
+    /// The stand-in driver's seed. `-1` before initialization **and in the
+    /// production seam**, where there is no stand-in and therefore no seed:
+    /// the value is absent, not zero.
     #[func]
     fn seed(&self) -> i64 {
         match self.stand_in {
@@ -669,7 +799,8 @@ impl RemichWeather {
     }
 
     /// The explicit cycle length in integer ticks. `-1` before
-    /// initialization.
+    /// initialization **and in the production seam**, which declares no
+    /// fixture cycle of its own.
     #[func]
     fn cycle_length(&self) -> i64 {
         match self.stand_in {
@@ -684,22 +815,80 @@ impl RemichWeather {
     /// a value of its own — it is `seed + tick` and nothing else. Refused
     /// (with the conflict named) if the channel is not owned by the stand-in
     /// driver.
+    ///
+    /// Structurally unavailable in the production seam: there is no stand-in
+    /// schedule there to drive, and the refusal says exactly that rather than
+    /// pretending the node is uninitialized. An externally driven node
+    /// publishes through [`Self::publish_external_snapshot`] instead.
     #[func]
     fn drive(&mut self, tick: i64) -> VarDictionary {
         if tick < 0 {
             return weather_failure("bad-input", "tick must not be negative");
         }
-        let (Some(channel), Some(stand_in)) = (self.channel.as_mut(), self.stand_in.as_ref())
-        else {
+        let Some(channel) = self.channel.as_mut() else {
             return weather_failure("not-initialized", "call initialize first");
         };
+        let Some(stand_in) = self.stand_in else {
+            return weather_failure("no-stand-in-driver", &no_stand_in_message("drive it"));
+        };
         match stand_in.drive(channel, tick as u64) {
-            Ok(snapshot) => snapshot_dictionary(&snapshot, stand_in.seed()),
+            Ok(snapshot) => snapshot_dictionary(&snapshot, self.seed()),
             Err(error) => weather_refusal(&error),
         }
     }
 
-    /// The latest published snapshot, read straight from the Rust channel.
+    /// **The production publish operation** (Remich issue #19): publishes one
+    /// complete, externally decided snapshot for the supplied **integer world
+    /// tick** and returns it.
+    ///
+    /// The whole production surface in one call: `tick` is the tick Remich's
+    /// one clock produced and the caller hands in — this seam never advances,
+    /// rounds, interpolates or generates a tick, and never decides when
+    /// weather changes — and the six weather values are the seven snapshot
+    /// fields as decided elsewhere. It publishes as [`EXTERNAL_DRIVER_ID`]
+    /// and nothing else, so a stand-in-initialized node refuses it with
+    /// `writer-conflict` instead of being bypassed.
+    ///
+    /// Refused, with nothing changed, when the snapshot is invalid
+    /// (`invalid-snapshot`, the existing finite/non-negative rules) or when
+    /// this identity does not own the channel.
+    #[func]
+    fn publish_external_snapshot(
+        &mut self,
+        tick: i64,
+        wind_dir_x: f64,
+        wind_dir_z: f64,
+        wind_strength: f64,
+        rain: f64,
+        temperature: f64,
+        light: f64,
+    ) -> VarDictionary {
+        if tick < 0 {
+            return weather_failure("bad-input", "tick must not be negative");
+        }
+        // The stand-in seed belongs to a mode that does not exist here; -1 is
+        // this file's established "not available" value for it.
+        let seed = self.seed();
+        let Some(channel) = self.channel.as_mut() else {
+            return weather_failure("not-initialized", "call initialize first");
+        };
+        match publish_external_snapshot_through(
+            channel,
+            tick as u64,
+            wind_dir_x,
+            wind_dir_z,
+            wind_strength,
+            rain,
+            temperature,
+            light,
+        ) {
+            Ok(snapshot) => snapshot_dictionary(&snapshot, seed),
+            Err(error) => weather_refusal(&error),
+        }
+    }
+
+    /// The latest published snapshot, read straight from the Rust channel —
+    /// whichever mode published it, this is the one read every consumer gets.
     /// `ok=false` with code `no-snapshot` before the first publish. Reading
     /// never claims the channel and never writes.
     #[func]
@@ -708,7 +897,7 @@ impl RemichWeather {
             return weather_failure("not-initialized", "call initialize first");
         };
         match channel.read() {
-            Some(snapshot) => snapshot_dictionary(&snapshot, self.seed().max(0) as u64),
+            Some(snapshot) => snapshot_dictionary(&snapshot, self.seed()),
             None => weather_failure("no-snapshot", "no snapshot has been published yet"),
         }
     }
@@ -777,19 +966,38 @@ impl RemichWeather {
     /// through the engine's real runtime setter
     /// (`RenderingServer.global_shader_parameter_set`), and returns the exact
     /// vector that was applied — also kept as instrumentation for
-    /// [`Self::last_applied_wind`]. Refused when no snapshot exists. This is
-    /// the binding's one live render write; the snapshot itself never
-    /// becomes renderer-specific.
+    /// [`Self::last_applied_wind`]. Refused when no snapshot exists.
+    ///
+    /// This is the binding's one live render write, and it reads **the one
+    /// channel** in whichever mode published the snapshot: a snapshot published
+    /// through [`Self::publish_external_snapshot`] is visible to this same call,
+    /// from the same Rust channel, with no second object in between. The
+    /// snapshot itself never becomes renderer-specific.
+    ///
+    /// **Refused in the production seam** (`no-presentation-phase`). W is the
+    /// game-supplied *presentation phase* in radians — not weather, not part of
+    /// a weather snapshot — and a phase needs an explicit cycle, which is the
+    /// stand-in fixture's `cycle_length`. The production seam declares no cycle
+    /// and this binding refuses to fabricate one: a frozen `0.0` would silently
+    /// make the real Grengewald motion phase static. The externally decided
+    /// weather itself is unaffected and fully readable through
+    /// [`Self::snapshot`]; only this renderer-facing edge is out of scope here.
     #[func]
     fn apply_wind(&mut self) -> VarDictionary {
-        let (Some(channel), Some(stand_in)) = (&self.channel, self.stand_in) else {
+        let Some(channel) = self.channel.as_ref() else {
             return weather_failure("not-initialized", "call initialize first");
         };
         let Some(snapshot) = channel.read() else {
             return weather_failure("no-snapshot", "no snapshot has been published yet");
         };
+        // A presentation phase exists only where a presentation cycle was
+        // declared. The stand-in fixture has one; the production seam has none,
+        // and says so instead of inventing a motion phase.
+        let Some(cycle_length) = presentation_cycle_of(self.stand_in.as_ref()) else {
+            return no_presentation_phase_failure();
+        };
 
-        let [x, y, z, w] = wind_vector(&snapshot, stand_in.cycle_length());
+        let [x, y, z, w] = wind_vector(&snapshot, cycle_length);
         // Godot's `vec4` (and Grengewald's shader) is 32-bit: convert once,
         // at this edge, and record the rounded components — the setter's
         // argument exactly — rather than the unrounded inputs.
@@ -851,8 +1059,11 @@ impl RemichWeather {
     /// restored integer tick when the wind global is next applied.
     #[func]
     fn restore_save_state(&mut self, state: VarDictionary) -> VarDictionary {
-        let (Some(channel), Some(stand_in)) = (&mut self.channel, &self.stand_in) else {
+        let Some(channel) = self.channel.as_mut() else {
             return weather_failure("not-initialized", "call initialize first");
+        };
+        let Some(stand_in) = self.stand_in else {
+            return weather_failure("no-stand-in-driver", &no_stand_in_message("restore into it"));
         };
         let parsed = (|| -> Result<(u64, u64, WeatherSnapshot), String> {
             let seed = plain_integer(&field(&state, "seed")?, "saved weather seed")?;
@@ -908,13 +1119,50 @@ impl RemichWeather {
     }
 }
 
+/// The refusal a node in the production seam gives to a stand-in-only
+/// operation. It names the mode instead of claiming the node is
+/// uninitialized, and it says where the weather does come from.
+fn no_stand_in_message(operation: &str) -> String {
+    format!(
+        "this weather node is in the production seam: writer '{EXTERNAL_DRIVER_ID}' owns the one \
+         channel and there is no stand-in schedule to {operation}. Publish the decided snapshot \
+         with publish_external_snapshot(tick, ...) instead."
+    )
+}
+
+/// The refusal an externally driven node gives to `apply_wind()`.
+///
+/// It separates the two things deliberately: the **weather** seam is healthy and
+/// has published a valid, present snapshot, and this is the *presentation* side
+/// of the wind global that it does not own. W is the game-supplied motion phase
+/// in radians; no weather snapshot carries one, so there is nothing honest to
+/// write there. Freezing it at `0.0`, or borrowing the fixture's 240-tick cycle,
+/// would silently make the real Grengewald motion phase static — so this seam
+/// refuses and leaves that decision to the later presentation integration.
+fn no_presentation_phase_failure() -> VarDictionary {
+    weather_failure(
+        "no-presentation-phase",
+        &format!(
+            "the external weather snapshot on this node is valid and present, but this seam does \
+             not own a production presentation phase: writer '{EXTERNAL_DRIVER_ID}' owns the one \
+             channel, and the wind global's W is the game-supplied motion phase in radians, not \
+             weather. Read the decided weather through snapshot() and writer_status(); supply the \
+             motion phase where the presentation is owned instead."
+        ),
+    )
+}
+
 /// The published snapshot as plain Godot data. Plain reads only: this is the
 /// same Rust struct the channel holds, handed across the boundary.
-pub(crate) fn snapshot_dictionary(snapshot: &WeatherSnapshot, seed: u64) -> VarDictionary {
+///
+/// `seed` is the stand-in fixture's seed, or `-1` in the production seam,
+/// where no stand-in exists. It is not a snapshot field and never was; the
+/// seven snapshot fields below are the whole contract, unchanged.
+pub(crate) fn snapshot_dictionary(snapshot: &WeatherSnapshot, seed: i64) -> VarDictionary {
     let mut result = VarDictionary::new();
     result.set("ok", true);
     result.set("bridge_rev", WEATHER_BRIDGE_REV);
-    result.set("seed", seed as i64);
+    result.set("seed", seed);
     result.set("tick", snapshot.tick as i64);
     result.set("wind_dir_x", snapshot.wind_dir_x);
     result.set("wind_dir_z", snapshot.wind_dir_z);
@@ -1378,6 +1626,341 @@ mod tests {
         assert!(!section.contains("delta"));
         assert!(!section.contains("elapsed"));
         assert!(!section.contains("Instant"));
+    }
+
+    // ------------------------------------------- the production seam (#19)
+
+    /// The production seam's identity is the core's one constant, spelled
+    /// once. This binding cannot pass any other identity to the production
+    /// publish path, so a gameplay caller cannot become the production writer.
+    #[test]
+    fn the_production_seam_uses_the_one_core_writer_id() {
+        assert_eq!(EXTERNAL_DRIVER_ID, "eislek-weather-driver");
+        let core_source = include_str!("../../remich_core/src/weather.rs");
+        assert!(
+            core_source.contains(&format!("pub const EXTERNAL_DRIVER_ID: &str = \"{EXTERNAL_DRIVER_ID}\"")),
+            "the production identity is the core's constant, and only there"
+        );
+        // The seam is the identity plus the existing channel API: the binding
+        // never invents a second one. Scanned over the binding's own code —
+        // this test's assertions name the literal deliberately.
+        let code = include_str!("lib.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the test module is last");
+        let spelled_out = format!("\"{EXTERNAL_DRIVER_ID}\"");
+        assert_eq!(
+            code.matches(&spelled_out).count(),
+            0,
+            "the binding must reference the constant, never restate the literal"
+        );
+    }
+
+    /// The production publish is one whole-snapshot operation under the
+    /// already-claimed production writer, and it adds no rule of its own: the
+    /// snapshot is built by the existing validating constructor and stored by
+    /// the existing one-writer publish.
+    #[test]
+    fn the_production_publish_is_one_validated_whole_snapshot() {
+        let mut channel = WeatherChannel::new();
+        channel
+            .claim_writer(EXTERNAL_DRIVER_ID)
+            .expect("the production driver claims the channel");
+
+        let published = publish_external_snapshot_through(&mut channel, 137, 0.6, 0.8, 0.42, 0.25, 7.5, 0.33)
+            .expect("a complete decided snapshot publishes");
+        assert_eq!(published.tick, 137);
+        assert_eq!(channel.read(), Some(published), "the same channel holds it");
+        assert_eq!(channel.writer_id(), Some(EXTERNAL_DRIVER_ID));
+
+        // It is a whole snapshot, not a partial update: there is no field a
+        // caller can set on its own, and the seven values are the contract.
+        // Scanned over the binding's own code, so this test's own list of
+        // forbidden names cannot satisfy or trip itself.
+        let code = include_str!("lib.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the test module is last");
+        for forbidden in [
+            ["fn set_", "rain"].concat(),
+            ["fn set_", "wind"].concat(),
+            ["fn set_", "temperature"].concat(),
+            ["fn set_", "light"].concat(),
+            ["fn set_", "snapshot"].concat(),
+            ["fn set_", "tick"].concat(),
+            ["fn set_", "weather"].concat(),
+        ] {
+            assert!(
+                !code.contains(&forbidden),
+                "the production seam must not offer '{forbidden}'"
+            );
+        }
+
+        // There is no generic publish a caller could point at a writer of its
+        // own choosing. The only two publish functions in this binding are the
+        // one engine-facing production operation and the plain helper it
+        // delegates to — the stand-in's entry point is `drive`, not a publish.
+        let mut publishes = code
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("fn publish"))
+            .map(|rest| rest.split(['(', ' ']).next().unwrap_or("").to_string())
+            .collect::<Vec<_>>();
+        publishes.sort();
+        assert_eq!(
+            publishes,
+            vec![
+                "_external_snapshot".to_string(),
+                "_external_snapshot_through".to_string(),
+            ],
+            "exactly one production publish operation, plus the helper it calls"
+        );
+        // ...and it takes the seven snapshot values and nothing else: no
+        // writer identity, no per-field setters, no options bag.
+        let signature = code
+            .split("fn publish_external_snapshot(")
+            .nth(1)
+            .expect("the operation exists")
+            .split(')')
+            .next()
+            .expect("its signature ends");
+        for parameter in [
+            "tick: i64",
+            "wind_dir_x: f64",
+            "wind_dir_z: f64",
+            "wind_strength: f64",
+            "rain: f64",
+            "temperature: f64",
+            "light: f64",
+        ] {
+            assert!(
+                signature.contains(parameter),
+                "the production publish must take '{parameter}'"
+            );
+        }
+        for forbidden in ["writer", "id:", "GString", "Variant", "Dictionary"] {
+            assert!(
+                !signature.contains(forbidden),
+                "the production publish must not take '{forbidden}'"
+            );
+        }
+    }
+
+    /// Tick ownership stays where it was. The seam publishes the exact
+    /// integer tick the authoritative caller supplied: out of order, repeated
+    /// and non-adjacent ticks all come back verbatim, and it holds no state
+    /// between calls that could move one.
+    #[test]
+    fn the_production_publish_preserves_the_supplied_tick_exactly() {
+        let mut channel = WeatherChannel::new();
+        channel
+            .claim_writer(EXTERNAL_DRIVER_ID)
+            .expect("the production driver claims the channel");
+
+        for tick in [4096u64, 7, 0, 1, 999_999, 240] {
+            publish_external_snapshot_through(&mut channel, tick, 0.0, 1.0, 0.0, 0.0, 10.0, 0.5)
+                .expect("the decided snapshot publishes");
+            let read = channel.read().expect("published");
+            assert_eq!(read.tick, tick, "the exact tick supplied is published");
+        }
+
+        // The seam's own source holds no clock: no delta, no wall time, no
+        // counter, no second time authority anywhere in it.
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("fn publish_external_snapshot_through")
+            .expect("the production publish helper exists");
+        let end = source[start..]
+            .find("\n}\n")
+            .map(|offset| start + offset)
+            .expect("the helper body ends");
+        let body = &source[start..end];
+        for banned in [
+            ["e", "lapsed"].concat(),
+            ["del", "ta"].concat(),
+            ["Inst", "ant::now"].concat(),
+            ["System", "Time"].concat(),
+            ["thread", "_rng"].concat(),
+            ["ran", "dom"].concat(),
+            ["World", "Clock"].concat(),
+            ["as_", "secs"].concat(),
+            ["total_", "seconds"].concat(),
+        ] {
+            assert!(
+                !body.contains(&banned),
+                "the production seam must not contain '{banned}'"
+            );
+        }
+    }
+
+    /// Validation is unchanged and still belongs to the core: non-finite and
+    /// negative values are refused through the existing rules, the refusal
+    /// substitutes nothing, and the last valid snapshot survives it.
+    #[test]
+    fn the_production_publish_refuses_invalid_values_and_keeps_the_last_snapshot() {
+        let mut channel = WeatherChannel::new();
+        channel
+            .claim_writer(EXTERNAL_DRIVER_ID)
+            .expect("the production driver claims the channel");
+        let good = publish_external_snapshot_through(&mut channel, 137, 0.6, 0.8, 0.42, 0.25, 7.5, 0.33)
+            .expect("valid");
+        let before = channel.read().expect("published");
+
+        for (values, expected) in [
+            (
+                [0.6, 0.8, 0.42, f64::NAN, 7.5, 0.33],
+                WeatherError::NonFinite { field: "rain" },
+            ),
+            (
+                [0.6, 0.8, 0.42, 0.25, f64::INFINITY, 0.33],
+                WeatherError::NonFinite {
+                    field: "temperature",
+                },
+            ),
+            (
+                [f64::NAN, 0.8, 0.42, 0.25, 7.5, 0.33],
+                WeatherError::NonFinite {
+                    field: "wind_dir_x",
+                },
+            ),
+            (
+                [0.6, 0.8, -0.1, 0.25, 7.5, 0.33],
+                WeatherError::NegativeWindStrength,
+            ),
+        ] {
+            let refused =
+                publish_external_snapshot_through(&mut channel, 138, values[0], values[1], values[2], values[3], values[4], values[5]);
+            assert_eq!(refused, Err(expected), "the existing validation refuses it");
+            assert_eq!(channel.read(), Some(before), "the last valid snapshot stands");
+        }
+        assert_eq!(channel.read(), Some(good));
+    }
+
+    /// The one-writer rule still bites at the seam: a distinct second writer
+    /// is refused, and the production owner and its snapshot both stand.
+    #[test]
+    fn the_production_channel_still_refuses_a_second_writer() {
+        let mut channel = WeatherChannel::new();
+        channel
+            .claim_writer(EXTERNAL_DRIVER_ID)
+            .expect("the production driver claims the channel");
+        let published = publish_external_snapshot_through(&mut channel, 137, 0.6, 0.8, 0.42, 0.25, 7.5, 0.33)
+            .expect("published");
+
+        let claim = channel.claim_writer("intruder-driver");
+        assert!(
+            matches!(claim, Err(WeatherError::WriterConflict { .. })),
+            "a distinct second writer must be refused"
+        );
+        let forged = WeatherSnapshot::new(138, -1.0, 0.0, 9.0, 1.0, 30.0, 1.0)
+            .expect("valid, refused purely on ownership");
+        assert!(
+            matches!(
+                channel.publish("intruder-driver", forged),
+                Err(WeatherError::WriterConflict { .. })
+            ),
+            "a second writer's publish must be refused"
+        );
+        assert_eq!(channel.writer_id(), Some(EXTERNAL_DRIVER_ID));
+        assert_eq!(channel.read(), Some(published), "the snapshot is untouched");
+    }
+
+    /// The production publish cannot bypass the stand-in that owns the
+    /// channel. The stand-in claims first in a stand-in-initialized node, and
+    /// the production identity is then refused by the same core rule.
+    #[test]
+    fn the_production_publish_cannot_bypass_a_stand_in_owner() {
+        let stand_in = StandInWeather::new(70021, 240).expect("valid fixture cycle");
+        let mut channel = WeatherChannel::new();
+        stand_in.attach(&mut channel).expect("the stand-in claims the channel");
+        stand_in.drive(&mut channel, 130).expect("the stand-in publishes");
+        let before = channel.read().expect("published");
+
+        let bypass = publish_external_snapshot_through(&mut channel, 137, 0.6, 0.8, 0.42, 0.25, 7.5, 0.33);
+        match bypass {
+            Err(WeatherError::WriterConflict { held_by, attempted }) => {
+                assert_eq!(held_by, STAND_IN_DRIVER_ID, "the stand-in keeps the channel");
+                assert_eq!(attempted, EXTERNAL_DRIVER_ID);
+            }
+            other => panic!("the production publish must not bypass the stand-in, got {other:?}"),
+        }
+        assert_eq!(channel.read(), Some(before), "the stand-in's snapshot stands");
+        assert_eq!(channel.writer_id(), Some(STAND_IN_DRIVER_ID));
+    }
+
+    /// The stand-in mode is unchanged: it still claims the channel for its
+    /// own identity, still drives whole cycles from seed + integer tick, and
+    /// the production identity is not a second claim on it.
+    #[test]
+    fn the_stand_in_mode_still_owns_its_channel_and_drives_whole_cycles() {
+        let stand_in = StandInWeather::new(70021, 240).expect("valid fixture cycle");
+        let mut channel = WeatherChannel::new();
+        stand_in.attach(&mut channel).expect("the stand-in claims the channel");
+        assert_eq!(channel.writer_id(), Some(STAND_IN_DRIVER_ID));
+
+        for tick in 0..240u64 {
+            let driven = stand_in.drive(&mut channel, tick).expect("the owner drives");
+            assert_eq!(driven.tick, tick, "the driven tick is the one supplied");
+            assert_eq!(channel.read().expect("published").tick, tick);
+        }
+        // The production identity cannot displace it (one channel, one writer).
+        assert!(
+            matches!(
+                channel.claim_writer(EXTERNAL_DRIVER_ID),
+                Err(WeatherError::WriterConflict { .. })
+            ),
+            "the production identity must not displace the stand-in"
+        );
+        assert_eq!(channel.writer_id(), Some(STAND_IN_DRIVER_ID));
+    }
+
+    /// The production seam declares **no** presentation cycle, so it refuses to
+    /// produce a motion phase at all — it never freezes W at `0.0` and never
+    /// borrows the fixture's cycle. The stand-in's explicit cycle is untouched,
+    /// so its tick-derived phase still moves.
+    #[test]
+    fn the_external_seam_declares_no_presentation_cycle_and_fabricates_no_phase() {
+        // The mode itself is what decides: no stand-in driver means no
+        // presentation cycle, which is the refusal, not a default value.
+        assert_eq!(presentation_cycle_of(None), None, "the seam declares no cycle");
+
+        let stand_in = StandInWeather::new(70021, 240).expect("valid fixture cycle");
+        assert_eq!(
+            presentation_cycle_of(Some(&stand_in)),
+            Some(240),
+            "the stand-in's own explicit cycle is unchanged"
+        );
+
+        // Nothing in the binding invents a cycle for the external mode, and no
+        // frozen phase is written on its behalf. Scanned over the binding's own
+        // code, so this test's own list of names cannot satisfy or trip itself.
+        let code = include_str!("lib.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the test module is last");
+        assert!(
+            !code.contains(&["EXTERNAL", "PRESENTATION_CYCLE"].concat()),
+            "the seam must declare no presentation cycle of its own"
+        );
+        let seam_start = code
+            .find("fn no_presentation_phase_failure")
+            .expect("the refusal exists");
+        let refusal = &code[seam_start..];
+        for stated in ["no-presentation-phase", "valid and present", "motion phase"] {
+            assert!(
+                refusal.contains(stated),
+                "the refusal must state '{stated}'"
+            );
+        }
+
+        // The stand-in's phase is unchanged: it still varies with the tick.
+        assert_ne!(presentation_phase(0, 240), presentation_phase(60, 240));
+        let snapshot = WeatherSnapshot::new(137, 0.6, 0.8, 0.42, 0.25, 7.5, 0.33)
+            .expect("a complete decided snapshot");
+        assert_eq!(
+            wind_vector(&snapshot, 240)[3],
+            presentation_phase(137, 240),
+            "the fixture's applied W is still the tick-derived phase"
+        );
     }
 
     /// The Godot layer converts and forwards: it never scores.
