@@ -700,14 +700,16 @@ while IFS= read -r line; do
     # match the number of FAIL lines above rather than appear in the list.
     case "$message" in
         "Phase 2 Step 2 — "*)
-            expected_count="$(printf '%s\n' "$PREEXISTING_STEP2_FAILURES" \
-                | grep -c . || true)"
-            reported_count="${message##* }"
-            reported_count="${reported_count%%(*}"
-            if [ "$reported_count" = "$expected_count" ]; then
-                pass "the Step 2 summary still reports $reported_count failures, all pre-existing"
+            # The summary reads "— N check(s) failed"; N is the count of the
+            # real FAIL lines above, all of which must already be pre-existing.
+            summary_count="$(printf '%s' "$message" | sed -n 's/.*— \([0-9][0-9]*\) check.*/\1/p')"
+            listed_count="$(printf '%s\n' "$PREEXISTING_STEP2_FAILURES" | grep -c . || true)"
+            if [ -z "$summary_count" ]; then
+                fail "the Step 2 summary line could not be read: $message"
+            elif [ "$summary_count" = "$listed_count" ]; then
+                pass "the Step 2 summary reports $summary_count failures, matching the pre-existing set"
             else
-                fail "the Step 2 summary reports $reported_count failures, expected $expected_count"
+                fail "the Step 2 summary reports $summary_count failures; $listed_count are pre-existing"
             fi
             continue
             ;;
