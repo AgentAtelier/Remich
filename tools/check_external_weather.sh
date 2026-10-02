@@ -689,24 +689,30 @@ Step 1 sub-check log: no REMICH_SCORER_OK marker (or the sub-check itself failed
 Step 1 sub-check log: no REMICH_DECAY_OK marker (or the sub-check itself failed)
 Step 1 sub-check log: no REMICH_BRIDGE_OK marker (or the sub-check itself failed)
 Grengewald is dirty — this step must not modify it
-Phase 2 Step 2 — 8 check(s) failed
 "
 
 unexpected_step2=""
 while IFS= read -r line; do
     [ -z "$line" ] && continue
-    # The final summary line restates the count, so compare it separately.
-    case "$line" in
-        "FAIL  Phase 2 Step 2 — "*)
-            if ! printf '%s\n' "$PREEXISTING_STEP2_FAILURES" \
-                | grep -qxF "$line"; then
-                unexpected_step2="$unexpected_step2$line
-"
+    # Strip the checker's own "FAIL  " prefix; the list above holds messages.
+    message="${line#FAIL  }"
+    # The trailing summary line restates the check count, so it is expected to
+    # match the number of FAIL lines above rather than appear in the list.
+    case "$message" in
+        "Phase 2 Step 2 — "*)
+            expected_count="$(printf '%s\n' "$PREEXISTING_STEP2_FAILURES" \
+                | grep -c . || true)"
+            reported_count="${message##* }"
+            reported_count="${reported_count%%(*}"
+            if [ "$reported_count" = "$expected_count" ]; then
+                pass "the Step 2 summary still reports $reported_count failures, all pre-existing"
+            else
+                fail "the Step 2 summary reports $reported_count failures, expected $expected_count"
             fi
             continue
             ;;
     esac
-    if ! printf '%s\n' "$PREEXISTING_STEP2_FAILURES" | grep -qxF "FAIL  $line"; then
+    if ! printf '%s\n' "$PREEXISTING_STEP2_FAILURES" | grep -qxF "$message"; then
         unexpected_step2="$unexpected_step2$line
 "
     fi
@@ -720,10 +726,12 @@ else
 fi
 
 # The weather-specific half of that run must be green — the marker proves the
-# stand-in path still works end to end.
-if grep -qE '^REMICH_WEATHER_OK seed=[0-9]+ ticks=[0-9]+ writer=stand-in-weather-schedule' "$LOG_STEP2"; then
+# stand-in path still works end to end. The step-2 checker indents the marker
+# when it echoes a sub-check's own output, so match it anywhere in the line.
+if grep -qE 'REMICH_WEATHER_OK seed=[0-9]+ ticks=[0-9]+ writer=stand-in-weather-schedule' "$LOG_STEP2"; then
     pass "the stand-in weather run still succeeds through the unchanged fixture"
-    grep -h '^REMICH_WEATHER_OK ' "$LOG_STEP2" | head -1 | sed 's/^/      | /'
+    grep -hoE 'REMICH_WEATHER_OK seed=[0-9]+ ticks=[0-9]+ writer=stand-in-weather-schedule calm=[0-9.]+ windy=[0-9.]+ rev=[a-z0-9-]+' \
+        "$LOG_STEP2" | head -1 | sed 's/^/      | /'
 else
     fail "the stand-in weather run did not succeed (REMICH_WEATHER_OK missing)"
 fi
