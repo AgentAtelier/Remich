@@ -50,6 +50,8 @@
 #  22. `drive(tick)` is refused in external mode — no stand-in weather is
 #      silently generated;
 #  23. a second distinct writer is refused in-engine, naming both writers;
+#  23b. a production publish cannot overwrite a stand-in that owns the channel,
+#       proven in-engine and named on both sides;
 #  24. the committed Remich weather acceptance still passes unchanged (run as a
 #      sub-check, with its own pre-existing failures reported as such);
 #  25. no generated trace, staging or build state is tracked;
@@ -395,6 +397,21 @@ else
     fail "the production publish does not go through WeatherChannel::publish"
 fi
 
+# The channel must not gain a way to be written without its owner's identity.
+# A stray pre-claim inside the seam would look harmless and be a bypass.
+seam_body="$(awk '
+    /^fn publish_external_snapshot_through\(/ { inside = 1 }
+    inside && /^}$/ { print; inside = 0; next }
+    inside { print }
+' "$GDEX_SRC" 2>/dev/null)"
+for banned in "claim_writer" "latest =" "fn publish_with" "SABOTAGE"; do
+    if printf '%s' "$seam_body" | grep -qF "$banned"; then
+        fail "the production seam contains '$banned' — it must only publish as $EXTERNAL_WRITER"
+    else
+        pass "the production seam contains no '$banned'"
+    fi
+done
+
 if grep -qF 'channel.claim_writer(EXTERNAL_DRIVER_ID)' "$GDEX_SRC"; then
     pass "external initialization goes through WeatherChannel::claim_writer"
 else
@@ -563,7 +580,23 @@ do
     fi
 done
 
-header "18-23. What the engine run proved, read from its own log"
+# The second half of the one-writer rule, proven in-engine: a production
+# publish must not overwrite a writer that already holds the channel. The
+# engine log shows the refusal naming both identities.
+takeover_line="$(grep -h "writer 'eislek-weather-driver' was refused" "$LOG_RUN" 2>/dev/null | head -1)"
+if [ -n "$takeover_line" ]; then
+    pass "in-engine: a production publish was refused against the stand-in that owns the channel"
+    note "$(printf '%s' "$takeover_line" | sed 's/^ERROR: //')"
+    if printf '%s' "$takeover_line" | grep -qF "owned by '$STAND_IN_WRITER'"; then
+        pass "the refusal names the stand-in as the holder and $EXTERNAL_WRITER as the refused writer"
+    else
+        fail "the takeover refusal does not name $STAND_IN_WRITER as the holder"
+    fi
+else
+    fail "the engine run shows no refused production publish against the stand-in"
+fi
+
+header "18-24. What the engine run proved, read from its own log"
 
 # 18. the one channel is claimed for the production writer, not the stand-in.
 conflict_line="$(grep -h "writer 'intruder-weather-driver' was refused" "$LOG_RUN" 2>/dev/null | head -1)"

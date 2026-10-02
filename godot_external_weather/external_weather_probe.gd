@@ -37,7 +37,12 @@ extends Node
 ##   7. invalid values are refused through the existing validation and the last
 ##      valid snapshot survives untouched;
 ##   8. a **second writer is refused from the engine side**, naming both
-##      writers, leaving owner and snapshot unchanged.
+##      writers, leaving owner and snapshot unchanged;
+##   9. a production publish **cannot overwrite a writer that already holds the
+##      channel** — against a stand-in-mode node it is refused with
+##      `writer-conflict` naming both identities, and that node's snapshot
+##      stands. (A second node is used for this because it is a different
+##      *mode*; it is freed again, so exactly one live object remains.)
 ##
 ## Failure prints `REMICH_EXTERNAL_WEATHER_FAIL reason=... detail=...` and
 ## exits non-zero. Success prints `REMICH_EXTERNAL_WEATHER_OK` and exits 0.
@@ -310,6 +315,10 @@ func _run() -> void:
 			return
 
 	# --- 8. a second writer is refused from the engine side -------------------
+	# Two refusals, because the one-writer rule has two halves and both must
+	# bite in the engine: a distinct identity may not CLAIM, and (proven below,
+	# on a stand-in-owned node) a production publish may not overwrite a writer
+	# that already holds the channel.
 	var claim: Dictionary = created.call("try_claim_writer", "intruder-weather-driver")
 	if bool(claim.get("ok", false)):
 		_fail("second-writer-accepted", "a distinct second writer was allowed to claim the channel")
@@ -330,7 +339,48 @@ func _run() -> void:
 		_fail("snapshot-changed", "the refused claim changed the published snapshot")
 		return
 
-	# Nothing along the way replaced the object or grew a second channel.
+	# --- 9. a production publish cannot overwrite another writer ---------------
+	# The other half of the one-writer rule, proved through the engine: a node
+	# initialized in STAND-IN mode holds the channel under the stand-in id, and
+	# the production publish must be refused against it — no matter how valid
+	# the snapshot is. This is a separate node on purpose (it is a different
+	# mode, not a second channel on the shared one), and it is freed before the
+	# instance-count check below, which still requires exactly one live object.
+	var stand_in_node: Node = ClassDB.instantiate(WEATHER_CLASS) as Node
+	if stand_in_node == null:
+		_fail("instantiate-failed", "could not create a stand-in-mode node")
+		return
+	add_child(stand_in_node)
+	var fixture_init := stand_in_node.call("initialize", 70021, 240) as Dictionary
+	if not bool(fixture_init.get("ok", false)):
+		_fail("stand-in-init-refused", str(fixture_init.get("error", "")))
+		return
+	if str(stand_in_node.call("writer_id")) != STAND_IN_WRITER:
+		_fail("stand-in-writer", "the stand-in node is owned by '%s'" % str(stand_in_node.call("writer_id")))
+		return
+	stand_in_node.call("drive", 130)
+	var stand_in_before := JSON.stringify(stand_in_node.call("snapshot"))
+	var takeover: Dictionary = stand_in_node.call("publish_external_snapshot",
+		TICK, WIND_DIR_X, WIND_DIR_Z, WIND_STRENGTH, RAIN, TEMPERATURE, LIGHT)
+	if bool(takeover.get("ok", false)):
+		_fail("takeover-accepted", "a production publish overwrote the stand-in that owns the channel")
+		return
+	if str(takeover.get("code", "")) != "writer-conflict":
+		_fail("takeover-code", "the production publish against the stand-in failed with '%s', expected 'writer-conflict'" % [
+			str(takeover.get("code", ""))])
+		return
+	var takeover_conflict := "%s %s %s" % [
+		str(takeover.get("error", "")), str(takeover.get("held_by", "")), str(takeover.get("attempted", ""))]
+	if not takeover_conflict.contains(STAND_IN_WRITER) or not takeover_conflict.contains(EXTERNAL_WRITER):
+		_fail("takeover-unnamed", "the refusal must name both writers, got: " + takeover_conflict)
+		return
+	if JSON.stringify(stand_in_node.call("snapshot")) != stand_in_before:
+		_fail("takeover-replaced", "the refused publish changed the stand-in's snapshot")
+		return
+	stand_in_node.queue_free()
+	await get_tree().process_frame
+
+	# Nothing along the way replaced the shared object or grew a second channel.
 	if int(created.call("get_instance_id")) != instance_before:
 		_fail("instance-replaced", "the native weather object changed during the run")
 		return

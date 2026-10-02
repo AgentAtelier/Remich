@@ -187,8 +187,10 @@ second initialization is refused either way; `drive(tick)` is refused; one
 complete decided snapshot publishes and reads back through `snapshot()` with
 exactly the seven supplied values and the exact tick; `writer_status()` names
 the production writer; `apply_wind()` derives the global from that snapshot;
-invalid values are refused with the last valid one intact; and a second writer
-is refused with both identities named.
+invalid values are refused with the last valid one intact; a second writer is
+refused with both identities named; and a production publish is refused against
+a stand-in-mode node that already owns the channel, so the seam cannot take a
+channel over from whoever holds it.
 
 The probe supplies **plain test numbers** as if it were Eisleck. Remich has no
 dependency on that driver and remains independently testable.
@@ -200,7 +202,26 @@ byte-for-byte identical to the base, and `tools/check_phase2_step2.sh` is not
 modified. The stand-in mode is still fixture behaviour, and its own acceptance
 still proves it.
 
-## 7. Not in this change
+## 7. Bite checks (sabotage, reverted)
+
+Two deliberate weakenings were introduced, the acceptance was re-run against
+each, and both were fully reverted afterwards (`git status` clean):
+
+| sabotage | caught by |
+|---|---|
+| rename `EXTERNAL_DRIVER_ID` in the core | `the_production_writer_id_is_one_fixed_constant` (Rust) and the engine probe: `reason=wrong-writer … claimed 'saboteur-weather', expected 'eislek-weather-driver'`, exit 1 |
+| remove the ownership check from `WeatherChannel::publish` | four core tests, two binding tests, and — after it was found missing — the engine probe: `reason=takeover-accepted`, exit 1 |
+
+The second one is why the probe now carries the takeover case. The first
+engine run of that sabotage still reported `REMICH_EXTERNAL_WEATHER_OK`: the
+probe's second-writer check only exercised `claim_writer`, and a claim refusal
+does not prove a *publish* refusal. The probe was extended to attempt a
+production publish against a stand-in-owned node, and it now fails loudly when
+the publish path stops enforcing ownership. The checker also greps the seam's
+own body for a stray `claim_writer`, so a pre-claim cannot be slipped back in
+as a bypass.
+
+## 8. Not in this change
 
 Weather generation, climate, scheduling, cloud policy, weather transitions,
 random weather, player weather controls, per-field gameplay setters, a second
@@ -209,7 +230,7 @@ any dependency on Eisleck. Issue #19 is **not** closed by this: it is resolved
 only once the merged seam has been used successfully for the stopped Eisleck
 Step-3 end-to-end one-channel acceptance.
 
-## 8. A note on the id's spelling
+## 9. A note on the id's spelling
 
 `eislek-weather-driver` is spelled exactly as issue #19 spells it (with `k`).
 The repository and the external driver are `Eisleck` (with `c`). This seam
